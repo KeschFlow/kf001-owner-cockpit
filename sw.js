@@ -1,9 +1,12 @@
-const CACHE_NAME = 'kf001-owner-cockpit-v1';
+const CACHE_NAME = 'kf001-owner-cockpit-v3';
 const APP_SHELL = [
   './',
   './index.html',
   './manifest.json',
-  './app-icon.svg'
+  './app-icon.svg',
+  './governance-config.js',
+  './adapters.js',
+  './governance.js'
 ];
 
 self.addEventListener('install', (event) => {
@@ -12,6 +15,40 @@ self.addEventListener('install', (event) => {
       .then((cache) => cache.addAll(APP_SHELL))
       .then(() => self.skipWaiting())
   );
+});
+
+self.addEventListener('push', (event) => {
+  event.waitUntil((async () => {
+    let payload;
+    try {
+      payload = event.data?.json();
+    } catch {
+      return;
+    }
+    if (!payload || payload.type !== 'OWNER_GATE' || !payload.title || !payload.body) return;
+    await self.registration.showNotification(payload.title, {
+      body: payload.body,
+      icon: './app-icon.svg',
+      badge: './app-icon.svg',
+      tag: payload.caseId ? `owner-gate-${payload.caseId}` : 'owner-gate',
+      data: { url: payload.url || './', testOnly: false }
+    });
+  })());
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = new URL(event.notification.data?.url || './', self.registration.scope).href;
+  event.waitUntil((async () => {
+    const windows = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const existing = windows.find((client) => client.url.startsWith(self.registration.scope));
+    if (existing) {
+      await existing.focus();
+      if ('navigate' in existing) await existing.navigate(target);
+      return;
+    }
+    await clients.openWindow(target);
+  })());
 });
 
 self.addEventListener('activate', (event) => {
@@ -40,15 +77,26 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
+  const requestUrl = new URL(event.request.url);
+  if (requestUrl.origin === self.location.origin) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
 
-      return fetch(event.request).then((response) => {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-        return response;
-      });
-    })
+  event.respondWith(
+    caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
+      const copy = response.clone();
+      caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+      return response;
+    }))
   );
 });
+
