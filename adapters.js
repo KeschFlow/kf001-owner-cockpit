@@ -1,6 +1,6 @@
 const CACHE_KEY = 'kf001-owner-cache-v2';
 
-export const CASE_STATUSES = Object.freeze({
+const CASE_STATUSES = Object.freeze({
   PENDING_APPROVAL: 'PENDING_APPROVAL',
   APPROVED_PENDING_DISPATCH: 'APPROVED_PENDING_DISPATCH',
   DISPATCHED: 'DISPATCHED',
@@ -38,7 +38,7 @@ function safeCacheRecord(record) {
   };
 }
 
-export class CaseStoreAdapter {
+class CaseStoreAdapter {
   get centralBackendConnected() {
     return Boolean(config().apiBaseUrl);
   }
@@ -126,7 +126,7 @@ export class CaseStoreAdapter {
   }
 }
 
-export class NotificationAdapter {
+class NotificationAdapter {
   get pushBackendConnected() {
     return Boolean(config().apiBaseUrl && config().pushPublicKey);
   }
@@ -179,7 +179,7 @@ export class NotificationAdapter {
   }
 }
 
-export class OutreachAdapter {
+class OutreachAdapter {
   constructor(caseStore) {
     this.caseStore = caseStore;
   }
@@ -193,7 +193,7 @@ export class OutreachAdapter {
   }
 }
 
-export class EvidenceAdapter {
+class EvidenceAdapter {
   async hashFile(file) {
     if (!file) return { hashStatus: 'NOT_AVAILABLE', sha256: null };
     if (!globalThis.crypto?.subtle) throw new Error('SHA-256 wird von diesem Browser nicht unterstützt');
@@ -209,4 +209,12 @@ export class EvidenceAdapter {
     };
   }
 }
+
+globalThis.KF001_ADAPTERS = Object.freeze({
+  CASE_STATUSES,
+  CaseStoreAdapter,
+  NotificationAdapter,
+  OutreachAdapter,
+  EvidenceAdapter
+});
 
