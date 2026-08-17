@@ -47,7 +47,8 @@ function renderSystemStatus() {
 
 function renderOwnerGate() {
   const container = document.getElementById('ownerGateContainer');
-  const central = ownerState.isSourceOfTruth;
+  const centralRead = ownerState.isSourceOfTruth;
+  const centralWrite = centralRead && Boolean(globalThis.KF001_CONFIG?.approvalIntentConnected);
   container.className = 'bg-gradient-to-br from-amber-950/40 via-slate-800 to-slate-900 p-4 sm:p-5 rounded-2xl border border-amber-500/40 shadow-lg space-y-4';
   container.innerHTML = `
     <div class="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/20 pb-3">
@@ -66,8 +67,12 @@ function renderOwnerGate() {
       <span class="block text-[10px] text-slate-400 font-mono mb-1">VORBEREITETE OUTREACH-NACHRICHT · ÖFFENTLICH ABSTRAHIERT</span>
       <p class="text-xs text-slate-200 leading-relaxed">${esc(ownerState.outreachMessage)}</p>
     </div>
-    <div id="gateTruth" class="p-3 rounded-xl border ${central ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-200' : 'bg-amber-950/30 border-amber-500/30 text-amber-200'} text-[11px]">
-      ${central ? 'Entscheidungen werden als Approval-Intent an den zentralen Backend-Adapter gesendet.' : 'CENTRAL BACKEND = NO. Entscheidungen werden nur im lokalen Cache vorgemerkt und sind NICHT zentral synchronisiert. APPROVE löst KEINEN Versand aus.'}
+    <div id="gateTruth" class="p-3 rounded-xl border ${centralWrite ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-200' : 'bg-amber-950/30 border-amber-500/30 text-amber-200'} text-[11px]">
+      ${centralWrite
+        ? 'Entscheidungen werden als Approval-Intent an den zentralen Backend-Adapter gesendet.'
+        : centralRead
+          ? 'CENTRAL READ = LIVE. OWNER WRITE = NOT LIVE. APPROVE/REJECT bleiben lokaler, nicht autoritativer Cache. Kein serverseitiger Versand.'
+          : 'CENTRAL BACKEND = NO. Entscheidungen werden nur im lokalen Cache vorgemerkt und sind NICHT zentral synchronisiert. APPROVE löst KEINEN Versand aus.'}
     </div>
     <div id="gateActionButtons" class="grid grid-cols-2 gap-2">
       <button id="approveIntentBtn" class="py-3 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow transition-all">✅ APPROVE</button>
@@ -169,14 +174,25 @@ function retireDemoControls() {
   const demoButton = document.getElementById('simRevenueBtn');
   if (demoButton) demoButton.remove();
   const subtitle = document.getElementById('sbSubtitle');
-  if (subtitle) subtitle.textContent = '[ÖFFENTLICHE ANSICHT · ANONYMISIERT · KEIN CENTRAL STATE]';
+  if (subtitle) subtitle.textContent = ownerState?.isSourceOfTruth
+    ? '[ÖFFENTLICHE ANSICHT · ANONYMISIERT · D1 CENTRAL STATE]'
+    : '[ÖFFENTLICHE ANSICHT · ANONYMISIERT · KEIN CENTRAL STATE]';
+  const centralAuditText = document.getElementById('centralStateAuditText');
+  const centralAuditStatus = document.getElementById('centralStateAuditStatus');
+  if (centralAuditText && centralAuditStatus) {
+    centralAuditText.textContent = ownerState?.isSourceOfTruth
+      ? 'CENTRAL STATE: D1 ist autoritative Source of Truth.'
+      : 'CENTRAL STATE: Kein privater Backend-Dienst verbunden.';
+    centralAuditStatus.textContent = ownerState?.isSourceOfTruth ? 'LIVE' : 'NOT LIVE';
+    centralAuditStatus.className = `${ownerState?.isSourceOfTruth ? 'text-emerald-400' : 'text-amber-400'} font-bold`;
+  }
   const version = document.querySelector('header h1 + span');
   if (version) version.textContent = 'v1.4 PUBLIC GOVERNANCE';
 }
 
 async function initGovernance() {
-  retireDemoControls();
   ownerState = await caseStore.loadOwnerState();
+  retireDemoControls();
   renderSystemStatus();
   renderOwnerGate();
   renderPreparedSystems();

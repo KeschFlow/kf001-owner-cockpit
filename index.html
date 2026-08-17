@@ -458,8 +458,8 @@
             <span class="text-emerald-400 font-bold">OK</span>
           </div>
           <div class="p-2 bg-slate-900/80 rounded border border-slate-800 text-slate-300 flex justify-between">
-            <span>CENTRAL STATE: Kein privater Backend-Dienst konfiguriert.</span>
-            <span class="text-amber-400 font-bold">NOT LIVE</span>
+            <span id="centralStateAuditText">CENTRAL STATE: Kein privater Backend-Dienst verbunden.</span>
+            <span id="centralStateAuditStatus" class="text-amber-400 font-bold">NOT LIVE</span>
           </div>
           <div class="p-2 bg-slate-900/80 rounded border border-slate-800 text-slate-300 flex justify-between">
             <span>PATTERN_DB: Private Baseline geschützt. Öffentliche Ansicht anonymisiert.</span>
@@ -1097,7 +1097,7 @@
     }
   </script>
   <script src="./adapters.js?v=1.4.4"></script>
-  <script src="./governance.js?v=1.4.4"></script>
+  <script src="./governance.js?v=1.5.1"></script>
   <script>
     window.addEventListener('load', () => setTimeout(() => {
       if (globalThis.KF001_GOVERNANCE_LOADED) return;
