@@ -344,10 +344,7 @@
           </div>
 
           <div class="bg-slate-900/90 p-3.5 rounded-xl border border-emerald-500/40 space-y-1.5">
-            <div class="flex justify-betwe…4931 tokens truncated…      sbContainer.className = "bg-gradient-to-r from-slate-950 via-emerald-950/40 to-indigo-950 p-5 sm:p-6 rounded-2xl border border-emerald-500/50 shadow-2xl space-y-4";
-        sbTitle.innerText = "🏆 KF-001 SCOREBOARD (SIMULATION SZENARIO)";
-        sbSubtitle.innerText = "[🧪 DEMO-MODUS: ANONYMISIERTER MUSTERFALL GELÖST]";
-        sbStatusDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping";
+            <div class="flex justify-betwe…5031 tokens truncated…rald-400 animate-ping";
 
         sbPeople.innerText = '1 Mensch';
         sbPeople.className = 'text-2xl sm:text-3xl font-extrabold text-emerald-400 animate-pulse';
@@ -758,7 +755,13 @@
       });
     }
   </script>
-  <script type="module" src="./governance.js?v=1.4.1"></script>
+  <script type="module">
+    import('./governance.js?v=1.4.2').catch((error) => {
+      const gate = document.getElementById('ownerGateContainer');
+      gate.className = 'bg-rose-950/40 p-5 rounded-2xl border border-rose-500/40';
+      gate.innerHTML = `<strong class="text-rose-300">OWNER GATE 1 · NOT LIVE</strong><p class="text-xs text-rose-200 mt-2">Governance-Modul konnte nicht geladen werden: ${String(error.message || error)}</p>`;
+    });
+  </script>
 </body>
 </html>
 
