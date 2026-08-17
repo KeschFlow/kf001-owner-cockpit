@@ -2,7 +2,7 @@
   "id": "./",
   "name": "KF-001 Owner Cockpit",
   "short_name": "KF-001 OS",
-  "description": "Pattern Intelligence & Impact Cockpit for Platform Disputes",
+  "description": "Anonymisierte KF-001 Owner Governance PWA",
   "lang": "de",
   "start_url": "./",
   "scope": "./",
@@ -25,3 +25,4 @@
     }
   ]
 }
+
