@@ -344,7 +344,351 @@
           </div>
 
           <div class="bg-slate-900/90 p-3.5 rounded-xl border border-emerald-500/40 space-y-1.5">
-            <div class="flex justify-betwe…5064 tokens truncated…text-emerald-400 animate-pulse';
+            <div class="flex justify-between items-center">
+              <span class="font-bold text-slate-300">Erster Outreach</span>
+              <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300">JA 🟢</span>
+            </div>
+            <p class="text-slate-400 text-[11px] leading-tight">B2B-Kanäle identifiziert, Outreach-Pakete vorbereitet.</p>
+          </div>
+
+          <div id="pmatCustomer" class="bg-slate-900/90 p-3.5 rounded-xl border border-amber-500/40 space-y-1.5">
+            <div class="flex justify-between items-center">
+              <span class="font-bold text-slate-300">Customer-Proof</span>
+              <span id="pmatCustomerChip" class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300">NEIN 🟡</span>
+            </div>
+            <p id="pmatCustomerText" class="text-slate-400 text-[11px] leading-tight">0 gelöste Fälle. Wartet auf Fall-Abschluss & unterschriebenes Mandat.</p>
+          </div>
+
+          <div id="pmatRevenue" class="bg-slate-900/90 p-3.5 rounded-xl border border-amber-500/40 space-y-1.5">
+            <div class="flex justify-between items-center">
+              <span class="font-bold text-slate-300">Revenue-Proof</span>
+              <span id="pmatRevenueChip" class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300">NEIN 🔴</span>
+            </div>
+            <p id="pmatRevenueText" class="text-slate-400 text-[11px] leading-tight">Finanz- und Vergütungsdaten sind in der öffentlichen PWA ausgeblendet.</p>
+          </div>
+
+        </div>
+      </div>
+
+      <div id="ownerGateContainer" class="bg-gradient-to-br from-amber-950/40 via-slate-800 to-slate-900 p-5 rounded-2xl border border-amber-500/40 shadow-lg space-y-4">
+        <div class="flex items-center justify-between border-b border-amber-500/20 pb-3">
+          <div class="flex items-center space-x-2">
+            <span class="px-2.5 py-1 rounded-md text-xs font-black bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse">
+              ⚠️ OWNER GATE 1: OUTREACH APPROVAL
+            </span>
+            <span class="text-xs text-slate-400 font-mono hidden sm:inline">Candidate #PUBLIC-A</span>
+          </div>
+          <span class="text-xs font-mono text-emerald-400 font-bold bg-emerald-950/80 px-2.5 py-1 rounded border border-emerald-800">
+            PRIORITÄT: HOCH
+          </span>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+          <div class="md:col-span-2 space-y-2">
+            <h3 class="font-extrabold text-white text-base">Anonymisierter Musterfall A</h3>
+            <p class="text-slate-300 leading-relaxed text-xs">
+              <strong>Impact:</strong> Hohe, intern verifizierte Relevanz; exakte Finanzwerte bleiben privat. <br>
+              <strong>Vektor:</strong> Abstrahierte Zugriffs- und Abrechnungsanomalie; technische Identifikatoren bleiben privat. <br>
+              <strong>B2B Channel:</strong> Externer Kontaktkanal intern verifiziert.
+            </p>
+            <div class="p-3 bg-slate-900/90 rounded-lg border border-slate-700/80 font-mono text-[11px] text-amber-200">
+              [Öffentliche Kurzfassung]: Ein B2B-Erstkontakt und ein forensisches Audit-Paket sind intern vorbereitet. Beweise und Konditionen bleiben privat.
+            </div>
+          </div>
+
+          <div class="bg-slate-950/80 p-4 rounded-xl border border-slate-800 flex flex-col justify-between space-y-3">
+            <div>
+              <span class="text-[10px] text-slate-400 uppercase font-mono tracking-wider block">System-Empfehlung</span>
+              <span class="font-bold text-emerald-400 text-sm block mt-0.5">APPROVE OUTREACH</span>
+              <p class="text-[11px] text-slate-400 mt-1 leading-tight">
+                Ein-Klick Freigabe. Es wird KEIN automatischer Spam versendet – Freigabe erlaubt den B2B-Versand.
+              </p>
+            </div>
+
+            <div id="gateActionButtons" class="grid grid-cols-2 gap-2 pt-2">
+              <button onclick="handleGateAction('APPROVE')" class="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow transition-all text-center">
+                ✅ APPROVE
+              </button>
+              <button onclick="handleGateAction('REJECT')" class="py-2.5 px-3 bg-rose-600/30 hover:bg-rose-600/50 text-rose-300 font-bold text-xs rounded-lg border border-rose-500/40 transition-all text-center">
+                🛑 REJECT
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-slate-800/80 p-5 rounded-2xl border border-slate-700/70 shadow-sm space-y-4">
+        <div class="flex items-center justify-between">
+          <h2 class="font-bold text-white text-base">KF-001 Operational Workflow & Safety Architecture</h2>
+          <span class="text-xs text-indigo-400 font-mono">14-Stufen Modell</span>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+          <div class="bg-slate-900/90 p-3.5 rounded-xl border border-slate-700/80 space-y-1">
+            <span class="text-[10px] font-bold text-indigo-400 uppercase font-mono">1. RECON (Autonom)</span>
+            <h4 class="font-bold text-white">Radar & Qualify</h4>
+            <p class="text-slate-400 text-[11px]">Crawl öffentlicher Quellen → Dual Scoring Engine → Contact Lookup.</p>
+          </div>
+
+          <div class="bg-amber-950/30 p-3.5 rounded-xl border border-amber-500/30 space-y-1">
+            <span class="text-[10px] font-bold text-amber-400 uppercase font-mono">2. GATE 1 (Human)</span>
+            <h4 class="font-bold text-amber-200">Owner Outreach Approval</h4>
+            <p class="text-amber-300/80 text-[11px]">Der Owner genehmigt den B2B-Erstkontakt. Keine autonomen Nachrichten.</p>
+          </div>
+
+          <div class="bg-slate-900/90 p-3.5 rounded-xl border border-slate-700/80 space-y-1">
+            <span class="text-[10px] font-bold text-indigo-400 uppercase font-mono">3. DOSSIER (Autonom)</span>
+            <h4 class="font-bold text-white">Forensik & Akte</h4>
+            <p class="text-slate-400 text-[11px]">Integritätsnachweise → Kausale Rekonstruktion → privates Pattern DB Matching.</p>
+          </div>
+
+          <div class="bg-emerald-950/30 p-3.5 rounded-xl border border-emerald-500/30 space-y-1">
+            <span class="text-[10px] font-bold text-emerald-400 uppercase font-mono">4. GATE 2 (Human)</span>
+            <h4 class="font-bold text-emerald-200">Escalation & Outcome</h4>
+            <p class="text-emerald-300/80 text-[11px]">Finale Dossier-Freigabe → Escalation Router → Learn Outcome.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-slate-800/80 p-5 rounded-2xl border border-slate-700/70 shadow-sm space-y-3">
+        <h3 class="font-bold text-white text-sm">System Operations & Audit Log</h3>
+        <div id="systemLogFeed" class="space-y-2 font-mono text-[11px] max-h-40 overflow-y-auto pr-1">
+          <div class="p-2 bg-slate-900/80 rounded border border-slate-800 text-slate-300 flex justify-between">
+            <span>RADAR: Öffentliche Statusansicht aktiv. Falldetails bleiben privat.</span>
+            <span class="text-emerald-400 font-bold">OK</span>
+          </div>
+          <div class="p-2 bg-slate-900/80 rounded border border-slate-800 text-slate-300 flex justify-between">
+            <span>CENTRAL STATE: Kein privater Backend-Dienst konfiguriert.</span>
+            <span class="text-amber-400 font-bold">NOT LIVE</span>
+          </div>
+          <div class="p-2 bg-slate-900/80 rounded border border-slate-800 text-slate-300 flex justify-between">
+            <span>PATTERN_DB: Private Baseline geschützt. Öffentliche Ansicht anonymisiert.</span>
+            <span class="text-slate-400">LOCKED</span>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <section id="sec-cases" class="tab-content hidden space-y-5">
+      
+      <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700/70 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div>
+          <h2 class="font-bold text-white text-base">Public Pattern View (7 anonymisierte Fälle)</h2>
+          <p class="text-slate-400 text-xs">Abstrahierte Fallmuster; echte Beweise verbleiben in der privaten Pattern DB.</p>
+        </div>
+
+        <div class="flex items-center space-x-2 w-full sm:w-auto text-xs">
+          <input type="text" id="caseSearchInput" oninput="filterCases()" placeholder="Suche nach Fall, ID..." class="w-full sm:w-48 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500">
+          
+          <select id="filterReadiness" onchange="filterCases()" class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500">
+            <option value="ALL">Alle Readiness</option>
+            <option value="READY">OUTREACH_READY</option>
+            <option value="NOT_READY">OUTREACH_NOT_READY</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="caseGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      </div>
+    </section>
+
+    <section id="sec-analytics" class="tab-content hidden space-y-5">
+      <div class="bg-slate-800/80 p-5 rounded-2xl border border-slate-700/70 shadow-sm">
+        <h2 class="font-bold text-white text-base">Similarity & Outcome Analytics</h2>
+        <p class="text-slate-400 text-xs mt-0.5">Anonymisierte Gegenüberstellung von Impact-Klassen, Mustern und Eskalationskanälen.</p>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <div class="bg-slate-800/80 p-5 rounded-2xl border border-slate-700/70 shadow-sm space-y-3">
+          <div class="flex justify-between items-center">
+            <h3 class="font-bold text-slate-200 text-sm">Anonymisierte Impact-Klasse</h3>
+            <span class="text-[11px] font-mono bg-slate-900 px-2 py-0.5 rounded text-indigo-400">7 Fälle</span>
+          </div>
+          <div class="chart-container">
+            <canvas id="damageChart"></canvas>
+          </div>
+        </div>
+
+        <div class="bg-slate-800/80 p-5 rounded-2xl border border-slate-700/70 shadow-sm space-y-3">
+          <div class="flex justify-between items-center">
+            <h3 class="font-bold text-slate-200 text-sm">Abstrahierte Musterkategorien</h3>
+            <span class="text-[11px] font-mono bg-slate-900 px-2 py-0.5 rounded text-emerald-400">Verteilung</span>
+          </div>
+          <div class="chart-container">
+            <canvas id="vectorChart"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="sec-simulator" class="tab-content hidden space-y-5">
+      <div class="bg-slate-800/80 p-5 rounded-2xl border border-slate-700/70 shadow-sm">
+        <h2 class="font-bold text-white text-base">Radar Lead Qualifier Inspector</h2>
+        <p class="text-slate-400 text-xs mt-0.5">Bewertet eingehende Foren- oder Web-Signale anhand der Rolle-2 Dual-Scoring Logik.</p>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div class="lg:col-span-2 bg-slate-800/80 p-5 rounded-2xl border border-slate-700/70 shadow-sm space-y-4">
+          <h3 class="font-bold text-white text-sm border-b border-slate-700/60 pb-2">Kandidaten-Parameter eingeben</h3>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+            <div>
+              <label class="block font-semibold text-slate-300 mb-1">Anonymisierter Impact-Index (0–100)</label>
+              <input type="number" id="simDamage" value="70" min="0" max="100" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-white font-mono focus:border-indigo-500">
+            </div>
+
+            <div>
+              <label class="block font-semibold text-slate-300 mb-1">Support Status</label>
+              <select id="simSupport" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-white focus:border-indigo-500">
+                <option value="DEADLOCK">Tier-1 Chat-Loop / Festgefahren (+30 Pkt)</option>
+                <option value="REJECTED">Formell abgelehnt (+35 Pkt)</option>
+                <option value="PARTIAL">Teilgutschrift / Unvollständig (+25 Pkt)</option>
+                <option value="OPEN">Erstkontakt offen (+10 Pkt)</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="block font-semibold text-slate-300 mb-1">Beweislage / Forensik</label>
+              <select id="simEvidence" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-white focus:border-indigo-500">
+                <option value="HIGH">Technische Logs + Abrechnungsbelege (+35 Pkt)</option>
+                <option value="MEDIUM">Screenshots + Ticket-IDs (+20 Pkt)</option>
+                <option value="LOW">Nur Forentext (+5 Pkt)</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="block font-semibold text-slate-300 mb-1">Externer B2B-Kanal vorhanden?</label>
+              <select id="simContact" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-white focus:border-indigo-500">
+                <option value="YES">Ja (Website Impressum / LinkedIn / E-Mail)</option>
+                <option value="NO">Nein (Nur anonymes Forum-Profil)</option>
+              </select>
+            </div>
+          </div>
+
+          <button onclick="runQualification()" class="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow transition-all">
+            ⚡ Lead qualifizieren & Owner Briefing berechnen
+          </button>
+        </div>
+
+        <div class="bg-slate-950 p-5 rounded-2xl border border-slate-800 flex flex-col justify-between space-y-4">
+          <div>
+            <span class="text-[10px] font-mono text-indigo-400 block uppercase tracking-wider">Qualifikations-Ergebnis</span>
+            <div class="mt-2 flex items-baseline space-x-2">
+              <span id="resScore" class="text-4xl font-extrabold text-white">90</span>
+              <span class="text-xs text-slate-400">/ 100 CASE_VALUE_SCORE</span>
+            </div>
+
+            <div class="mt-4 pt-3 border-t border-slate-800 space-y-2 text-xs">
+              <div class="flex justify-between items-center">
+                <span class="text-slate-400">Status:</span>
+                <span id="resVerdict" class="font-bold text-emerald-400">VERIFIED CASE</span>
+              </div>
+              <div class="flex justify-between items-center">
+                <span class="text-slate-400">Outreach State:</span>
+                <span id="resReady" class="font-bold text-amber-400">OUTREACH_READY</span>
+              </div>
+              <div class="flex justify-between items-center">
+                <span class="text-slate-400">Vergütungsmodell:</span>
+                <span id="resFee" class="font-mono text-white font-bold">PRIVATE</span>
+              </div>
+            </div>
+          </div>
+
+          <div id="resBriefing" class="p-3 bg-slate-900 rounded-lg border border-slate-800 text-[11px] text-slate-300 leading-relaxed font-mono">
+            [Briefing für Owner Gate 1] Lead erfüllt Schäden- & Beweis-Kriterien. B2B-Kanal vorhanden. Bereit für Freigabe durch Kesch.
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="md:hidden fixed bottom-0 left-0 right-0 bg-slate-950/95 backdrop-blur-lg border-t border-slate-800 z-50 safe-bottom">
+    <div class="grid grid-cols-4 text-center py-2 text-[10px] font-medium">
+      <button onclick="switchTab('cockpit')" id="mtab-cockpit" class="mnav-tab flex flex-col items-center text-indigo-400">
+        <span class="text-base mb-0.5">⚡</span>
+        <span>Cockpit</span>
+      </button>
+      <button onclick="switchTab('cases')" id="mtab-cases" class="mnav-tab flex flex-col items-center text-slate-400">
+        <span class="text-base mb-0.5">📁</span>
+        <span>Patterns</span>
+      </button>
+      <button onclick="switchTab('analytics')" id="mtab-analytics" class="mnav-tab flex flex-col items-center text-slate-400">
+        <span class="text-base mb-0.5">📊</span>
+        <span>Analytics</span>
+      </button>
+      <button onclick="switchTab('simulator')" id="mtab-simulator" class="mnav-tab flex flex-col items-center text-slate-400">
+        <span class="text-base mb-0.5">🎯</span>
+        <span>Inspector</span>
+      </button>
+    </div>
+  </nav>
+
+  <script>
+    let isRevenueSimulated = false;
+
+    function switchManifestView(viewKey) {
+      document.getElementById('mview-pitch').classList.add('hidden');
+      document.getElementById('mview-dialog').classList.add('hidden');
+      document.getElementById('mview-mission').classList.add('hidden');
+      
+      document.getElementById('mbtn-pitch').className = "px-2.5 py-1 rounded text-slate-400 hover:text-white transition-all whitespace-nowrap";
+      document.getElementById('mbtn-dialog').className = "px-2.5 py-1 rounded text-slate-400 hover:text-white transition-all whitespace-nowrap";
+      document.getElementById('mbtn-mission').className = "px-2.5 py-1 rounded text-slate-400 hover:text-white transition-all whitespace-nowrap";
+
+      document.getElementById('mview-' + viewKey).classList.remove('hidden');
+      document.getElementById('mbtn-' + viewKey).className = "px-2.5 py-1 rounded bg-purple-600 text-white font-bold transition-all whitespace-nowrap";
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {});
+      }
+
+      renderCases(caseData);
+      initCharts();
+    });
+
+    function toggleRevenueSimulation() {
+      isRevenueSimulated = !isRevenueSimulated;
+      const btn = document.getElementById('simRevenueBtn');
+      const sbContainer = document.getElementById('scoreboardContainer');
+      const sbTitle = document.getElementById('sbTitle');
+      const sbSubtitle = document.getElementById('sbSubtitle');
+      const sbStatusDot = document.getElementById('sbStatusDot');
+
+      const sbPeople = document.getElementById('sbPeople');
+      const sbPeopleSub = document.getElementById('sbPeopleSub');
+      const sbValue = document.getElementById('sbValue');
+      const sbValueSub = document.getElementById('sbValueSub');
+      const sbRevenue = document.getElementById('sbRevenue');
+      const sbRevenueSub = document.getElementById('sbRevenueSub');
+
+      const hdrImpact = document.getElementById('hdrImpact');
+      const hdrRev = document.getElementById('hdrRevenue');
+
+      const pitchStateAfterSub = document.getElementById('pitchStateAfterSub');
+      const pitchStateAfterText = document.getElementById('pitchStateAfterText');
+
+      const pmatCustomerChip = document.getElementById('pmatCustomerChip');
+      const pmatCustomerText = document.getElementById('pmatCustomerText');
+      const pmatCustomerBox = document.getElementById('pmatCustomer');
+      const pmatRevenueChip = document.getElementById('pmatRevenueChip');
+      const pmatRevenueText = document.getElementById('pmatRevenueText');
+      const pmatRevenueBox = document.getElementById('pmatRevenue');
+
+      if (isRevenueSimulated) {
+        btn.innerHTML = '<span>🔄 Reset auf unverfälschten Ist-Zustand</span>';
+        btn.className = "self-start sm:self-auto px-3 py-1.5 bg-emerald-600/30 text-emerald-200 border border-emerald-500/50 rounded-lg text-xs font-bold transition-all flex items-center space-x-2";
+
+        sbContainer.className = "bg-gradient-to-r from-slate-950 via-emerald-950/40 to-indigo-950 p-5 sm:p-6 rounded-2xl border border-emerald-500/50 shadow-2xl space-y-4";
+        sbTitle.innerText = "🏆 KF-001 SCOREBOARD (SIMULATION SZENARIO)";
+        sbSubtitle.innerText = "[🧪 DEMO-MODUS: ANONYMISIERTER MUSTERFALL GELÖST]";
+        sbStatusDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping";
+
+        sbPeople.innerText = '1 Mensch';
+        sbPeople.className = 'text-2xl sm:text-3xl font-extrabold text-emerald-400 animate-pulse';
         sbPeopleSub.innerText = 'Simuliert: anonymisierter Musterfall abgeschlossen';
         sbPeopleSub.className = 'text-[10px] text-emerald-400 font-bold block font-sans';
 
@@ -764,4 +1108,3 @@
   </script>
 </body>
 </html>
-

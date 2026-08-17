@@ -217,4 +217,3 @@ globalThis.KF001_ADAPTERS = Object.freeze({
   OutreachAdapter,
   EvidenceAdapter
 });
-

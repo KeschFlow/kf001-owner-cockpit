@@ -189,4 +189,3 @@ if (document.readyState === 'loading') {
 } else {
   initGovernance();
 }
-

@@ -6,4 +6,3 @@ globalThis.KF001_CONFIG = Object.freeze({
   evidencePath: '/v1/evidence',
   pushPublicKey: ''
 });
-

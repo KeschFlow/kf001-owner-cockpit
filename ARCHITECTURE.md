@@ -28,4 +28,3 @@ Der Ansatz passt voraussichtlich in die kostenlosen Kontingente eines kleinen Ow
 ## Noch nicht ausgeführt
 
 Es wurde kein Cloudflare-Konto, Worker, D1-Datenbank, Push-Key oder Gmail-Zugang aktiviert. Die öffentliche PWA enthält nur Adapter-Schnittstellen und zeigt alle nicht verbundenen Leistungen als `NOT LIVE` beziehungsweise `NO` an.
-
