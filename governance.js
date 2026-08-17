@@ -1,9 +1,14 @@
-import { CaseStoreAdapter, NotificationAdapter, OutreachAdapter, EvidenceAdapter } from './adapters.js?v=1.4.2';
+const {
+  CaseStoreAdapter: KFCaseStoreAdapter,
+  NotificationAdapter: KFNotificationAdapter,
+  OutreachAdapter: KFOutreachAdapter,
+  EvidenceAdapter: KFEvidenceAdapter
+} = globalThis.KF001_ADAPTERS;
 
-const caseStore = new CaseStoreAdapter();
-const notifications = new NotificationAdapter();
-const outreach = new OutreachAdapter(caseStore);
-const evidence = new EvidenceAdapter();
+const caseStore = new KFCaseStoreAdapter();
+const notifications = new KFNotificationAdapter();
+const outreach = new KFOutreachAdapter(caseStore);
+const evidence = new KFEvidenceAdapter();
 let ownerState;
 
 const yesNo = (value) => value ? 'YES' : 'NO';
@@ -176,6 +181,7 @@ async function initGovernance() {
   renderOwnerGate();
   renderPreparedSystems();
   addLog(`GOVERNANCE UI: OWNER GATE 1 LIVE; CENTRAL_BACKEND=${yesNo(ownerState.isSourceOfTruth)}; REAL_PUSH=${yesNo(notifications.pushBackendConnected)}; REAL_DISPATCH=${yesNo(outreach.realDispatchConnected)}`, 'TRUTHFUL');
+  globalThis.KF001_GOVERNANCE_LOADED = true;
 }
 
 if (document.readyState === 'loading') {
