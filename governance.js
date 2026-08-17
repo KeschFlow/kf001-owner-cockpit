@@ -1,4 +1,4 @@
-import { CaseStoreAdapter, NotificationAdapter, OutreachAdapter, EvidenceAdapter } from './adapters.js?v=1.4.1';
+import { CaseStoreAdapter, NotificationAdapter, OutreachAdapter, EvidenceAdapter } from './adapters.js?v=1.4.2';
 
 const caseStore = new CaseStoreAdapter();
 const notifications = new NotificationAdapter();
