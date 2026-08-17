@@ -1,0 +1,13 @@
+name = "kf001-owner-backend"
+main = "src/worker.js"
+compatibility_date = "2026-08-17"
+workers_dev = true
+
+[vars]
+PUBLIC_APP_ORIGIN = "https://keschflow.github.io"
+
+[[d1_databases]]
+binding = "CASE_DB"
+database_name = "kf001-owner-state"
+database_id = "REPLACE_AFTER_D1_CREATE"
+migrations_dir = "migrations"

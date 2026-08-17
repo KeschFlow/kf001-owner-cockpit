@@ -1,0 +1,16 @@
+{
+  "name": "kf001-owner-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/worker.js",
+    "test": "node --test test/worker.test.mjs",
+    "deploy": "wrangler deploy",
+    "migrate:local": "wrangler d1 migrations apply kf001-owner-state --local",
+    "migrate:remote": "wrangler d1 migrations apply kf001-owner-state --remote"
+  },
+  "devDependencies": {
+    "wrangler": "4.123.0"
+  }
+}

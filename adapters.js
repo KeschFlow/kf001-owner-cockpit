@@ -40,7 +40,7 @@ function safeCacheRecord(record) {
 
 class CaseStoreAdapter {
   get centralBackendConnected() {
-    return Boolean(config().apiBaseUrl);
+    return Boolean(config().apiBaseUrl && config().centralStateReadConnected);
   }
 
   readCache() {
@@ -62,9 +62,12 @@ class CaseStoreAdapter {
 
   async loadOwnerState() {
     const url = endpoint(config().ownerStatePath || '/v1/owner-state');
-    if (url) {
+    if (url && this.centralBackendConnected) {
       try {
-        const response = await fetch(url, { credentials: 'include', headers: { Accept: 'application/json' } });
+        const response = await fetch(url, {
+          credentials: config().ownerStateCredentials || 'omit',
+          headers: { Accept: 'application/json' }
+        });
         if (!response.ok) throw new Error(`Owner state HTTP ${response.status}`);
         const state = await response.json();
         this.writeCache(state);
@@ -97,7 +100,9 @@ class CaseStoreAdapter {
       ? CASE_STATUSES.APPROVED_PENDING_DISPATCH
       : CASE_STATUSES.REJECTED;
     const intent = { caseId, decision, expectedVersion: version, requestedAt: new Date().toISOString() };
-    const url = endpoint(config().approvalIntentPath || '/v1/approval-intents');
+    const url = config().approvalIntentConnected
+      ? endpoint(config().approvalIntentPath || '/v1/approval-intents')
+      : '';
 
     if (url) {
       const response = await fetch(url, {
