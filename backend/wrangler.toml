@@ -9,5 +9,5 @@ PUBLIC_APP_ORIGIN = "https://keschflow.github.io"
 [[d1_databases]]
 binding = "CASE_DB"
 database_name = "kf001-owner-state"
-database_id = "REPLACE_AFTER_D1_CREATE"
+database_id = "5249d296-0295-46fe-bd7f-f7055fca3f7b"
 migrations_dir = "migrations"
