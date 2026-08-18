@@ -5,11 +5,14 @@ const {
   EvidenceAdapter: KFEvidenceAdapter
 } = globalThis.KF001_ADAPTERS;
 
-const caseStore = new KFCaseStoreAdapter();
+const OwnerAuthAdapter = globalThis.KF001_OWNER_AUTH?.OwnerAuthAdapter;
+const ownerAuth = OwnerAuthAdapter ? new OwnerAuthAdapter() : null;
+const caseStore = new KFCaseStoreAdapter(ownerAuth);
 const notifications = new KFNotificationAdapter();
 const outreach = new KFOutreachAdapter(caseStore);
 const evidence = new KFEvidenceAdapter();
 let ownerState;
+let ownerAuthState = { enrolled: false, credentialCount: 0, verified: false };
 
 const yesNo = (value) => value ? 'YES' : 'NO';
 const esc = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
@@ -23,6 +26,15 @@ function statusCard(label, live, detail) {
   </div>`;
 }
 
+function centralWriteLive() {
+  return Boolean(
+    ownerState?.isSourceOfTruth &&
+    globalThis.KF001_CONFIG?.approvalIntentConnected &&
+    ownerAuth?.connected &&
+    ownerAuthState.enrolled
+  );
+}
+
 function renderSystemStatus() {
   let panel = document.getElementById('governanceStatus');
   if (!panel) {
@@ -34,25 +46,80 @@ function renderSystemStatus() {
   panel.innerHTML = `
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
       <div><h2 class="font-extrabold text-white text-sm">PUBLIC VIEW ↔ PRIVATE OWNER STATE</h2>
-      <p class="text-[11px] text-slate-400">Öffentlich: ausschließlich anonymisierte Anzeige. Privater Zustand: über sicheren Backend-Adapter, sobald konfiguriert.</p></div>
+      <p class="text-[11px] text-slate-400">Öffentlich: ausschließlich anonymisierte Anzeige. Owner-Schreibzugriff: Passkey-gesichert.</p></div>
       <span class="text-[10px] font-mono px-2 py-1 rounded bg-slate-950 text-amber-300 border border-amber-500/30">STATE SOURCE: ${esc(ownerState.stateSource)}</span>
     </div>
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
       ${statusCard('OWNER UI', true, 'Öffentliche PWA')}
       ${statusCard('CENTRAL BACKEND', caseStore.centralBackendConnected && ownerState.isSourceOfTruth, `CONNECTED = ${yesNo(caseStore.centralBackendConnected && ownerState.isSourceOfTruth)}`)}
-      ${statusCard('REAL PUSH', notifications.pushBackendConnected, `PUSH_BACKEND_CONNECTED = ${yesNo(notifications.pushBackendConnected)}`)}
+      ${statusCard('OWNER WRITE', centralWriteLive(), `PASSKEY_ENROLLED = ${yesNo(ownerAuthState.enrolled)}`)}
       ${statusCard('REAL OUTREACH DISPATCH', outreach.realDispatchConnected, `CONNECTED = ${yesNo(outreach.realDispatchConnected)}`)}
     </div>`;
+}
+
+function renderOwnerAuth() {
+  let section = document.getElementById('ownerAuthPanel');
+  if (!section) {
+    section = document.createElement('section');
+    section.id = 'ownerAuthPanel';
+    document.getElementById('ownerGateContainer').before(section);
+  }
+  const ticketAvailable = Boolean(ownerAuth?.enrollmentTicket);
+  const connected = Boolean(ownerAuth?.connected);
+  section.className = 'bg-slate-800/80 p-4 rounded-2xl border border-indigo-500/30 shadow-sm space-y-3';
+  section.innerHTML = `
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <div><h3 class="font-extrabold text-white text-sm">Owner Passkey</h3>
+      <p class="text-[11px] text-slate-400">Schützt zentrale APPROVE/REJECT-Entscheidungen. Kein Passkey = kein D1-Schreibzugriff.</p></div>
+      <span class="text-[10px] font-mono px-2 py-1 rounded bg-slate-950 border border-indigo-500/30 ${ownerAuthState.enrolled ? 'text-emerald-300' : 'text-amber-300'}">${ownerAuthState.enrolled ? 'ENROLLED' : 'NOT ENROLLED'}</span>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      ${!ownerAuthState.enrolled && ticketAvailable ? '<button id="registerPasskeyBtn" class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold">🔐 Owner-Passkey registrieren</button>' : ''}
+      ${ownerAuthState.enrolled ? '<button id="verifyPasskeyBtn" class="px-3 py-2 rounded-lg bg-slate-950 border border-indigo-500/40 text-indigo-200 text-xs font-bold">Passkey prüfen</button>' : ''}
+    </div>
+    <p id="ownerAuthResult" class="text-[10px] ${connected ? 'text-slate-400' : 'text-rose-300'}">${connected ? (ticketAvailable && !ownerAuthState.enrolled ? 'Enrollment-Ticket erkannt. Registrierung kann gestartet werden.' : `Credentials: ${ownerAuthState.credentialCount || 0}`) : 'OWNER_AUTH_NOT_CONNECTED'}</p>`;
+
+  document.getElementById('registerPasskeyBtn')?.addEventListener('click', registerOwnerPasskey);
+  document.getElementById('verifyPasskeyBtn')?.addEventListener('click', verifyOwnerPasskey);
+}
+
+async function registerOwnerPasskey() {
+  const output = document.getElementById('ownerAuthResult');
+  try {
+    output.textContent = 'Passkey-Registrierung läuft …';
+    await ownerAuth.register();
+    ownerAuthState = await ownerAuth.status();
+    output.textContent = 'Owner-Passkey registriert.';
+    renderOwnerAuth();
+    renderSystemStatus();
+    renderOwnerGate();
+    addLog('OWNER AUTH: Passkey registriert', 'LIVE');
+  } catch (error) {
+    output.textContent = `Passkey nicht registriert: ${error.message}`;
+  }
+}
+
+async function verifyOwnerPasskey() {
+  const output = document.getElementById('ownerAuthResult');
+  try {
+    output.textContent = 'Passkey-Prüfung läuft …';
+    const result = await ownerAuth.verify();
+    ownerAuthState = { ...ownerAuthState, ...result };
+    output.textContent = result.verified ? 'Passkey erfolgreich geprüft.' : 'Passkey-Prüfung fehlgeschlagen.';
+    renderSystemStatus();
+  } catch (error) {
+    output.textContent = `Passkey-Prüfung fehlgeschlagen: ${error.message}`;
+  }
 }
 
 function renderOwnerGate() {
   const container = document.getElementById('ownerGateContainer');
   const centralRead = ownerState.isSourceOfTruth;
-  const centralWrite = centralRead && Boolean(globalThis.KF001_CONFIG?.approvalIntentConnected);
+  const centralWrite = centralWriteLive();
   container.className = 'bg-gradient-to-br from-amber-950/40 via-slate-800 to-slate-900 p-4 sm:p-5 rounded-2xl border border-amber-500/40 shadow-lg space-y-4';
   container.innerHTML = `
     <div class="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/20 pb-3">
-      <span class="px-2.5 py-1 rounded-md text-xs font-black bg-amber-500/20 text-amber-300 border border-amber-500/40">OWNER GATE 1 · LIVE</span>
+      <span class="px-2.5 py-1 rounded-md text-xs font-black bg-amber-500/20 text-amber-300 border border-amber-500/40">OWNER GATE 1 · ${centralWrite ? 'LIVE' : 'READ ONLY'}</span>
       <span id="gateStateChip" class="text-[10px] font-mono text-amber-300 bg-slate-950 px-2 py-1 rounded border border-amber-500/30">${esc(ownerState.status)}</span>
     </div>
     <div class="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
@@ -69,17 +136,19 @@ function renderOwnerGate() {
     </div>
     <div id="gateTruth" class="p-3 rounded-xl border ${centralWrite ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-200' : 'bg-amber-950/30 border-amber-500/30 text-amber-200'} text-[11px]">
       ${centralWrite
-        ? 'Entscheidungen werden als Approval-Intent an den zentralen Backend-Adapter gesendet.'
+        ? 'OWNER WRITE = LIVE. Jede Entscheidung verlangt eine Passkey-Bestätigung und wird danach autoritativ in D1 gespeichert. Kein Versand wird ausgelöst.'
         : centralRead
-          ? 'CENTRAL READ = LIVE. OWNER WRITE = NOT LIVE. APPROVE/REJECT bleiben lokaler, nicht autoritativer Cache. Kein serverseitiger Versand.'
-          : 'CENTRAL BACKEND = NO. Entscheidungen werden nur im lokalen Cache vorgemerkt und sind NICHT zentral synchronisiert. APPROVE löst KEINEN Versand aus.'}
+          ? `CENTRAL READ = LIVE. OWNER WRITE = NOT LIVE. ${ownerAuthState.enrolled ? 'Owner-Auth ist noch nicht vollständig verfügbar.' : 'Zuerst Owner-Passkey registrieren.'}`
+          : 'CENTRAL BACKEND = NO. Keine zentrale Owner-Entscheidung möglich.'}
     </div>
     <div id="gateActionButtons" class="grid grid-cols-2 gap-2">
-      <button id="approveIntentBtn" class="py-3 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow transition-all">✅ APPROVE</button>
-      <button id="rejectIntentBtn" class="py-3 px-3 bg-rose-600/30 hover:bg-rose-600/50 text-rose-300 font-bold text-xs rounded-lg border border-rose-500/40 transition-all">🛑 REJECT</button>
+      <button id="approveIntentBtn" ${centralWrite ? '' : 'disabled'} class="py-3 px-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs rounded-lg shadow transition-all">✅ APPROVE</button>
+      <button id="rejectIntentBtn" ${centralWrite ? '' : 'disabled'} class="py-3 px-3 bg-rose-600/30 hover:bg-rose-600/50 disabled:opacity-40 disabled:cursor-not-allowed text-rose-300 font-bold text-xs rounded-lg border border-rose-500/40 transition-all">🛑 REJECT</button>
     </div>`;
-  document.getElementById('approveIntentBtn').addEventListener('click', () => decide('APPROVE'));
-  document.getElementById('rejectIntentBtn').addEventListener('click', () => decide('REJECT'));
+  if (centralWrite) {
+    document.getElementById('approveIntentBtn').addEventListener('click', () => decide('APPROVE'));
+    document.getElementById('rejectIntentBtn').addEventListener('click', () => decide('REJECT'));
+  }
 }
 
 function field(label, value) {
@@ -94,16 +163,14 @@ async function decide(decision) {
     ownerState = { ...ownerState, ...result };
     const truth = document.getElementById('gateTruth');
     document.getElementById('gateStateChip').textContent = result.status;
-    truth.className = `p-3 rounded-xl border text-[11px] ${result.centralState ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-200' : 'bg-amber-950/30 border-amber-500/30 text-amber-200'}`;
-    truth.textContent = result.centralState
-      ? `Approval-Intent zentral gespeichert. Status: ${result.status}. Ein Versand wurde durch den Client nicht ausgeführt.`
-      : `LOKALER CACHE/FALLBACK – NICHT SOURCE OF TRUTH. Status: ${result.status}. NOT_SYNCED. Kein serverseitiger Versand ausgeführt.`;
-    addLog(`OWNER GATE 1: ${decision} → ${result.status}; SOURCE=${result.stateSource}; DISPATCH_EXECUTED=NO`, result.centralState ? 'SYNCED' : 'NOT_SYNCED');
+    truth.className = 'p-3 rounded-xl border text-[11px] bg-emerald-950/30 border-emerald-500/30 text-emerald-200';
+    truth.textContent = `Approval-Intent zentral gespeichert. Status: ${result.status}. Ein Versand wurde nicht ausgeführt.`;
+    addLog(`OWNER GATE 1: ${decision} → ${result.status}; SOURCE=${result.stateSource}; DISPATCH_EXECUTED=NO`, 'SYNCED');
     renderSystemStatus();
   } catch (error) {
     document.getElementById('gateTruth').textContent = `Entscheidung nicht gespeichert: ${error.message}`;
   } finally {
-    buttons.querySelectorAll('button').forEach((button) => { button.disabled = false; button.classList.remove('opacity-50'); });
+    buttons.querySelectorAll('button').forEach((button) => { button.disabled = !centralWriteLive(); button.classList.remove('opacity-50'); });
   }
 }
 
@@ -187,16 +254,20 @@ function retireDemoControls() {
     centralAuditStatus.className = `${ownerState?.isSourceOfTruth ? 'text-emerald-400' : 'text-amber-400'} font-bold`;
   }
   const version = document.querySelector('header h1 + span');
-  if (version) version.textContent = 'v1.4 PUBLIC GOVERNANCE';
+  if (version) version.textContent = 'v1.5 OWNER WEBAUTHN';
 }
 
 async function initGovernance() {
   ownerState = await caseStore.loadOwnerState();
+  if (ownerAuth?.connected) {
+    ownerAuthState = await ownerAuth.status().catch(() => ({ enrolled: false, credentialCount: 0, verified: false }));
+  }
   retireDemoControls();
   renderSystemStatus();
+  renderOwnerAuth();
   renderOwnerGate();
   renderPreparedSystems();
-  addLog(`GOVERNANCE UI: OWNER GATE 1 LIVE; CENTRAL_BACKEND=${yesNo(ownerState.isSourceOfTruth)}; REAL_PUSH=${yesNo(notifications.pushBackendConnected)}; REAL_DISPATCH=${yesNo(outreach.realDispatchConnected)}`, 'TRUTHFUL');
+  addLog(`GOVERNANCE UI: CENTRAL_BACKEND=${yesNo(ownerState.isSourceOfTruth)}; OWNER_WRITE=${yesNo(centralWriteLive())}; REAL_PUSH=${yesNo(notifications.pushBackendConnected)}; REAL_DISPATCH=${yesNo(outreach.realDispatchConnected)}`, 'TRUTHFUL');
   globalThis.KF001_GOVERNANCE_LOADED = true;
 }
 
