@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kf001-owner-cockpit-v7-owner-webauthn';
+const CACHE_NAME = 'kf001-owner-cockpit-v8-gmail-dispatch';
 const APP_SHELL = [
   './',
   './index.html',
