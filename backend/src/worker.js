@@ -5,6 +5,7 @@ import {
   verifyOwnerAssertion,
   verifyRegistration
 } from './webauthn.js';
+import { gmailConfigured, sendGmail } from './gmail.js';
 
 const ALLOWED_PUBLIC_FIELDS = new Set([
   'caseId',
@@ -52,6 +53,11 @@ function isAuthorizedRadarRequest(request, env) {
   if (!env.RADAR_INGEST_TOKEN) return false;
   const authorization = request.headers.get('Authorization') || '';
   return authorization === `Bearer ${env.RADAR_INGEST_TOKEN}`;
+}
+
+function validEmail(value) {
+  const email = String(value || '').trim();
+  return email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 function validatePublicCase(input) {
@@ -152,6 +158,73 @@ async function upsertRadarCase(request, env) {
   return json({ accepted: true, caseId: input.caseId, stateSource: 'D1' }, 202);
 }
 
+async function upsertDispatchTarget(request, env) {
+  if (!isAuthorizedRadarRequest(request, env)) return json({ error: 'UNAUTHORIZED' }, 401);
+  const body = await request.json().catch(() => null);
+  if (!body || !/^PUB-[A-Z0-9-]{3,40}$/.test(body.caseId || '')) return json({ error: 'INVALID_CASE_ID' }, 400);
+  if (!validEmail(body.recipientEmail)) return json({ error: 'INVALID_RECIPIENT_EMAIL' }, 400);
+  const recipientName = String(body.recipientName || '').trim().slice(0, 200) || null;
+  const subject = String(body.subject || '').trim().slice(0, 300) || null;
+  const now = new Date().toISOString();
+  await env.CASE_DB.prepare(`
+    INSERT INTO dispatch_targets (public_case_id, recipient_email, recipient_name, subject, updated_at)
+    VALUES (?1, ?2, ?3, ?4, ?5)
+    ON CONFLICT(public_case_id) DO UPDATE SET
+      recipient_email = excluded.recipient_email,
+      recipient_name = excluded.recipient_name,
+      subject = excluded.subject,
+      updated_at = excluded.updated_at
+  `).bind(body.caseId, String(body.recipientEmail).trim(), recipientName, subject, now).run();
+  return json({ accepted: true, caseId: body.caseId, targetStored: true }, 202);
+}
+
+async function executeDispatch(env, caseId) {
+  if (!gmailConfigured(env)) return { executed: false, error: 'GMAIL_NOT_CONFIGURED' };
+  const target = await env.CASE_DB.prepare(`
+    SELECT recipient_email, recipient_name, subject
+    FROM dispatch_targets WHERE public_case_id = ?1
+  `).bind(caseId).first();
+  if (!target) return { executed: false, error: 'DISPATCH_TARGET_NOT_CONFIGURED' };
+
+  const state = await readOwnerState(env);
+  if (!state || state.caseId !== caseId) return { executed: false, error: 'ACTIVE_CASE_MISMATCH' };
+  const subject = target.subject || `KF-001 ${caseId}`;
+  const body = state.outreachMessage;
+  const now = new Date().toISOString();
+
+  try {
+    const sent = await sendGmail(env, {
+      to: target.recipient_email,
+      subject,
+      text: body
+    });
+    await env.CASE_DB.batch([
+      env.CASE_DB.prepare(`
+        UPDATE cases
+        SET status = 'DISPATCHED', version = version + 1, updated_at = ?2
+        WHERE public_case_id = ?1 AND is_active = 1
+      `).bind(caseId, now),
+      env.CASE_DB.prepare(`
+        INSERT INTO state_events (public_case_id, event_type, state, source, created_at)
+        VALUES (?1, 'OUTREACH_DISPATCHED', 'DISPATCHED', 'GMAIL_API', ?2)
+      `).bind(caseId, now),
+      env.CASE_DB.prepare(`
+        INSERT INTO dispatch_log (
+          public_case_id, provider, provider_message_id, recipient_email, status, error_code, created_at
+        ) VALUES (?1, 'GMAIL', ?2, ?3, 'SENT', NULL, ?4)
+      `).bind(caseId, sent.id, target.recipient_email, now)
+    ]);
+    return { executed: true, provider: 'GMAIL', messageId: sent.id };
+  } catch (error) {
+    await env.CASE_DB.prepare(`
+      INSERT INTO dispatch_log (
+        public_case_id, provider, provider_message_id, recipient_email, status, error_code, created_at
+      ) VALUES (?1, 'GMAIL', NULL, ?2, 'FAILED', ?3, ?4)
+    `).bind(caseId, target.recipient_email, String(error.message || 'GMAIL_SEND_FAILED').slice(0, 120), now).run();
+    return { executed: false, error: error.message || 'GMAIL_SEND_FAILED' };
+  }
+}
+
 async function handleApprovalIntent(request, env) {
   const body = await request.json().catch(() => null);
   const intent = body?.intent;
@@ -190,8 +263,18 @@ async function handleApprovalIntent(request, env) {
     VALUES (?1, 'OWNER_DECISION', ?2, 'OWNER_WEBAUTHN', ?3)
   `).bind(intent.caseId, newStatus, now).run();
 
+  let dispatch = { executed: false };
+  if (intent.decision === 'APPROVE') dispatch = await executeDispatch(env, intent.caseId);
+
   const state = await readOwnerState(env);
-  return json({ ...state, centralState: true, stateSource: 'D1', dispatchExecuted: false }, 200);
+  return json({
+    ...state,
+    centralState: true,
+    stateSource: 'D1',
+    dispatchExecuted: dispatch.executed,
+    dispatchProvider: dispatch.provider || null,
+    dispatchError: dispatch.error || null
+  }, 200);
 }
 
 export default {
@@ -216,7 +299,7 @@ export default {
           ownerWrite: owner.enrolled ? 'LIVE' : 'READY_FOR_ENROLLMENT',
           ownerCredentialCount: owner.credentialCount,
           realPush: 'NOT_LIVE',
-          realOutreachDispatch: 'NOT_LIVE'
+          realOutreachDispatch: gmailConfigured(env) ? 'LIVE' : 'NOT_LIVE'
         }, 200, cors);
       } catch {
         return json({ ok: false, centralState: 'NOT_LIVE', d1SourceOfTruth: 'NOT_LIVE' }, 503, cors);
@@ -281,6 +364,10 @@ export default {
 
     if (request.method === 'POST' && url.pathname === '/v1/radar/cases') {
       return upsertRadarCase(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/radar/dispatch-targets') {
+      return upsertDispatchTarget(request, env);
     }
 
     if (request.method === 'POST' && url.pathname === '/v1/approval-intents') {
