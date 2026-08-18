@@ -11,7 +11,16 @@ globalThis.KF001_CONFIG = Object.freeze({
   ownerAuthenticationOptionsPath: '/v1/auth/options',
   ownerAuthenticationVerifyPath: '/v1/auth/verify',
   approvalIntentPath: '/v1/approval-intents',
+  radarRunPath: '/v1/radar/run',
+  privateCaseDetailPath: '/v1/private/case-detail',
   pushSubscriptionPath: '/v1/push/subscriptions',
   evidencePath: '/v1/evidence',
   pushPublicKey: ''
 });
+
+(() => {
+  const script = document.createElement('script');
+  script.src = './radar-ui.js';
+  script.async = false;
+  document.head.appendChild(script);
+})();
