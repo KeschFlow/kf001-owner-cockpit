@@ -1,4 +1,4 @@
-const CACHE_KEY = 'kf001-owner-cache-v2';
+const CACHE_KEY = 'kf001-owner-cache-v3';
 
 const CASE_STATUSES = Object.freeze({
   PENDING_APPROVAL: 'PENDING_APPROVAL',
@@ -120,7 +120,7 @@ class CaseStoreAdapter {
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || `Approval intent HTTP ${response.status}`);
       this.writeCache(result);
-      return { ...result, centralState: true, stateSource: 'CENTRAL_BACKEND', dispatchExecuted: false };
+      return { ...result, centralState: true, stateSource: 'CENTRAL_BACKEND' };
     }
 
     const result = {
@@ -193,10 +193,31 @@ class NotificationAdapter {
 class OutreachAdapter {
   constructor(caseStore) {
     this.caseStore = caseStore;
+    this.dispatchLive = false;
+    this.lastHealth = null;
   }
 
   get realDispatchConnected() {
-    return false;
+    return this.dispatchLive === true;
+  }
+
+  async refreshStatus() {
+    const url = endpoint('/health');
+    if (!url) {
+      this.dispatchLive = false;
+      this.lastHealth = null;
+      return false;
+    }
+    const response = await fetch(url, {
+      credentials: 'omit',
+      cache: 'no-store',
+      headers: { Accept: 'application/json' }
+    });
+    const health = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(health.error || `Health HTTP ${response.status}`);
+    this.lastHealth = health;
+    this.dispatchLive = health.realOutreachDispatch === 'LIVE';
+    return this.dispatchLive;
   }
 
   submitApprovalIntent(payload) {
