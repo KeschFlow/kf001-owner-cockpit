@@ -39,6 +39,10 @@ function safeCacheRecord(record) {
 }
 
 class CaseStoreAdapter {
+  constructor(ownerAuth = null) {
+    this.ownerAuth = ownerAuth;
+  }
+
   get centralBackendConnected() {
     return Boolean(config().apiBaseUrl && config().centralStateReadConnected);
   }
@@ -105,14 +109,16 @@ class CaseStoreAdapter {
       : '';
 
     if (url) {
+      if (!this.ownerAuth?.connected) throw new Error('OWNER_AUTH_NOT_CONNECTED');
+      const auth = await this.ownerAuth.createAssertion('APPROVAL_INTENT', intent);
       const response = await fetch(url, {
         method: 'POST',
-        credentials: 'include',
+        credentials: 'omit',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify(intent)
+        body: JSON.stringify({ intent, auth })
       });
-      if (!response.ok) throw new Error(`Approval intent HTTP ${response.status}`);
-      const result = await response.json();
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `Approval intent HTTP ${response.status}`);
       this.writeCache(result);
       return { ...result, centralState: true, stateSource: 'CENTRAL_BACKEND', dispatchExecuted: false };
     }
