@@ -1,10 +1,11 @@
-const CACHE_NAME = 'kf001-owner-cockpit-v6';
+const CACHE_NAME = 'kf001-owner-cockpit-v7-owner-webauthn';
 const APP_SHELL = [
   './',
   './index.html',
   './manifest.json',
   './app-icon.svg',
   './governance-config.js',
+  './owner-auth.js',
   './adapters.js',
   './governance.js'
 ];
