@@ -6,6 +6,16 @@ workers_dev = true
 [vars]
 PUBLIC_APP_ORIGIN = "https://keschflow.github.io"
 
+[secrets]
+required = [
+  "OWNER_BOOTSTRAP_TOKEN",
+  "RADAR_INGEST_TOKEN",
+  "GMAIL_CLIENT_ID",
+  "GMAIL_CLIENT_SECRET",
+  "GMAIL_REFRESH_TOKEN",
+  "GMAIL_FROM"
+]
+
 [[d1_databases]]
 binding = "CASE_DB"
 database_name = "kf001-owner-state"
