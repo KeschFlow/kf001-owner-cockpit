@@ -1,5 +1,5 @@
 name = "kf001-owner-backend"
-main = "src/worker.js"
+main = "src/worker-v2.js"
 compatibility_date = "2026-08-17"
 workers_dev = true
 
@@ -15,6 +15,9 @@ required = [
   "GMAIL_REFRESH_TOKEN",
   "GMAIL_FROM"
 ]
+
+[triggers]
+crons = ["17 */3 * * *"]
 
 [[d1_databases]]
 binding = "CASE_DB"
