@@ -1,10 +1,10 @@
 {
   "name": "kf001-owner-backend",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check src/worker.js",
+    "check": "node --check src/worker.js && node --check src/worker-v2.js && node --check src/radar.js && node --check src/gmail.js && node --check src/webauthn.js",
     "test": "node --test test/worker.test.mjs",
     "deploy": "wrangler deploy",
     "migrate:local": "wrangler d1 migrations apply kf001-owner-state --local",
