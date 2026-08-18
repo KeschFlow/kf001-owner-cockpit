@@ -24,11 +24,37 @@ function corsHeaders(request, env) {
   };
 }
 
+async function ensureProductionSchema(env) {
+  const tableInfo = await env.CASE_DB.prepare('PRAGMA table_info(radar_candidates)').all();
+  const columns = Array.isArray(tableInfo?.results) ? tableInfo.results.map((row) => String(row.name || '')) : [];
+  if (columns.length > 0 && !columns.includes('published_at')) {
+    await env.CASE_DB.prepare('ALTER TABLE radar_candidates ADD COLUMN published_at TEXT').run();
+  }
+
+  const retired = await env.CASE_DB.prepare(`
+    UPDATE cases
+       SET status = 'REJECTED',
+           version = version + 1,
+           updated_at = ?1
+     WHERE public_case_id = 'PUB-001'
+       AND is_active = 1
+       AND status NOT IN ('DISPATCHED', 'RESPONSE_RECEIVED', 'REJECTED')
+  `).bind(new Date().toISOString()).run();
+
+  if (Number(retired.meta?.changes || 0) > 0) {
+    await env.CASE_DB.prepare(`
+      INSERT INTO state_events (public_case_id, event_type, state, source, created_at)
+      VALUES ('PUB-001', 'LEGACY_TEST_CASE_RETIRED', 'REJECTED', 'SYSTEM_RUNTIME_MIGRATION', ?1)
+    `).bind(new Date().toISOString()).run();
+  }
+}
+
 async function healthWithRadar(request, env, ctx) {
   const baseResponse = await baseWorker.fetch(request, env, ctx);
   const payload = await baseResponse.json().catch(() => ({}));
   let radar;
   try {
+    await ensureProductionSchema(env);
     radar = await radarStatus(env);
   } catch (error) {
     radar = { live: false, lastRunAt: null, lastRunError: error.message || 'RADAR_STATUS_FAILED' };
@@ -52,6 +78,7 @@ async function handleOwnerRadarRun(request, env) {
   const body = await request.json().catch(() => null);
   try {
     await verifyOwnerAssertion(env, body?.auth, 'RADAR_SCAN', null);
+    await ensureProductionSchema(env);
     const result = await runRadarScan(env);
     return json(result, 200, cors);
   } catch (error) {
@@ -68,6 +95,7 @@ async function handlePrivateCaseRead(request, env) {
   const payload = { caseId };
   try {
     await verifyOwnerAssertion(env, body?.auth, 'PRIVATE_CASE_READ', payload);
+    await ensureProductionSchema(env);
     const detail = await privateCaseDetail(env, caseId);
     if (!detail) return json({ error: 'PRIVATE_CASE_NOT_FOUND' }, 404, cors);
     return json(detail, 200, cors);
@@ -103,6 +131,9 @@ export default {
   },
 
   async scheduled(controller, env, ctx) {
-    ctx.waitUntil(runRadarScan(env));
+    ctx.waitUntil((async () => {
+      await ensureProductionSchema(env);
+      await runRadarScan(env);
+    })());
   }
 };
