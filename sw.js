@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kf001-owner-cockpit-v8-gmail-dispatch';
+const CACHE_NAME = 'kf001-owner-cockpit-v9-real-radar';
 const APP_SHELL = [
   './',
   './index.html',
@@ -7,7 +7,8 @@ const APP_SHELL = [
   './governance-config.js',
   './owner-auth.js',
   './adapters.js',
-  './governance.js'
+  './governance.js',
+  './radar-ui.js'
 ];
 
 self.addEventListener('install', (event) => {
