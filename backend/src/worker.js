@@ -1,3 +1,11 @@
+import {
+  authenticationOptions,
+  ownerStatus,
+  registrationOptions,
+  verifyOwnerAssertion,
+  verifyRegistration
+} from './webauthn.js';
+
 const ALLOWED_PUBLIC_FIELDS = new Set([
   'caseId',
   'caseValueScore',
@@ -33,8 +41,8 @@ function corsHeaders(request, env) {
   if (!origin || origin !== env.PUBLIC_APP_ORIGIN) return {};
   return {
     'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin'
   };
@@ -144,6 +152,48 @@ async function upsertRadarCase(request, env) {
   return json({ accepted: true, caseId: input.caseId, stateSource: 'D1' }, 202);
 }
 
+async function handleApprovalIntent(request, env) {
+  const body = await request.json().catch(() => null);
+  const intent = body?.intent;
+  const auth = body?.auth;
+  if (!intent || !['APPROVE', 'REJECT'].includes(intent.decision)) {
+    return json({ error: 'INVALID_APPROVAL_INTENT', dispatchExecuted: false }, 400);
+  }
+  if (!/^PUB-[A-Z0-9-]{3,40}$/.test(intent.caseId || '')) {
+    return json({ error: 'INVALID_CASE_ID', dispatchExecuted: false }, 400);
+  }
+  const expectedVersion = Number(intent.expectedVersion);
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
+    return json({ error: 'INVALID_EXPECTED_VERSION', dispatchExecuted: false }, 400);
+  }
+
+  try {
+    await verifyOwnerAssertion(env, auth, 'APPROVAL_INTENT', intent);
+  } catch (error) {
+    return json({ error: error.message, dispatchExecuted: false }, 401);
+  }
+
+  const newStatus = intent.decision === 'APPROVE' ? 'APPROVED_PENDING_DISPATCH' : 'REJECTED';
+  const now = new Date().toISOString();
+  const update = await env.CASE_DB.prepare(`
+    UPDATE cases
+       SET status = ?3, version = version + 1, updated_at = ?4
+     WHERE public_case_id = ?1 AND version = ?2 AND is_active = 1
+  `).bind(intent.caseId, expectedVersion, newStatus, now).run();
+
+  if (Number(update.meta?.changes || 0) !== 1) {
+    return json({ error: 'VERSION_CONFLICT', dispatchExecuted: false }, 409);
+  }
+
+  await env.CASE_DB.prepare(`
+    INSERT INTO state_events (public_case_id, event_type, state, source, created_at)
+    VALUES (?1, 'OWNER_DECISION', ?2, 'OWNER_WEBAUTHN', ?3)
+  `).bind(intent.caseId, newStatus, now).run();
+
+  const state = await readOwnerState(env);
+  return json({ ...state, centralState: true, stateSource: 'D1', dispatchExecuted: false }, 200);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -157,11 +207,14 @@ export default {
     if (request.method === 'GET' && url.pathname === '/health') {
       try {
         await env.CASE_DB.prepare('SELECT 1').first();
+        const owner = await ownerStatus(env).catch(() => ({ enrolled: false, credentialCount: 0 }));
         return json({
           ok: true,
           service: 'kf001-owner-backend',
           centralState: 'LIVE',
           d1SourceOfTruth: 'LIVE',
+          ownerWrite: owner.enrolled ? 'LIVE' : 'READY_FOR_ENROLLMENT',
+          ownerCredentialCount: owner.credentialCount,
           realPush: 'NOT_LIVE',
           realOutreachDispatch: 'NOT_LIVE'
         }, 200, cors);
@@ -180,12 +233,58 @@ export default {
       }
     }
 
+    if (request.method === 'GET' && url.pathname === '/v1/auth/status') {
+      try {
+        return json(await ownerStatus(env), 200, cors);
+      } catch (error) {
+        return json({ error: error.message }, 503, cors);
+      }
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/auth/register/options') {
+      try {
+        return json(await registrationOptions(request, env), 200, cors);
+      } catch (error) {
+        const code = error.message === 'OWNER_BOOTSTRAP_UNAUTHORIZED' ? 401 : 400;
+        return json({ error: error.message }, code, cors);
+      }
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/auth/register/verify') {
+      try {
+        const body = await request.json();
+        return json(await verifyRegistration(request, env, body), 200, cors);
+      } catch (error) {
+        const code = error.message === 'OWNER_BOOTSTRAP_UNAUTHORIZED' ? 401 : 400;
+        return json({ error: error.message }, code, cors);
+      }
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/auth/options') {
+      try {
+        const body = await request.json().catch(() => ({}));
+        const purpose = String(body.purpose || 'OWNER_VERIFY');
+        return json(await authenticationOptions(env, purpose, body.payload ?? null), 200, cors);
+      } catch (error) {
+        return json({ error: error.message }, 400, cors);
+      }
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/auth/verify') {
+      try {
+        const body = await request.json();
+        return json(await verifyOwnerAssertion(env, body.auth, 'OWNER_VERIFY', null), 200, cors);
+      } catch (error) {
+        return json({ error: error.message, verified: false }, 401, cors);
+      }
+    }
+
     if (request.method === 'POST' && url.pathname === '/v1/radar/cases') {
       return upsertRadarCase(request, env);
     }
 
     if (request.method === 'POST' && url.pathname === '/v1/approval-intents') {
-      return json({ error: 'OWNER_AUTH_NOT_CONFIGURED', status: 'NOT_LIVE', dispatchExecuted: false }, 503, cors);
+      return handleApprovalIntent(request, env);
     }
 
     if (request.method === 'POST' && url.pathname === '/v1/push/subscriptions') {
