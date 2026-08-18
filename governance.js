@@ -14,6 +14,10 @@ const evidence = new KFEvidenceAdapter();
 let ownerState;
 let ownerAuthState = { enrolled: false, credentialCount: 0, verified: false };
 
+// Signalisiert sofort, dass governance.js selbst geladen wurde. Die UI darf einen langsamen
+// Backend-Start nicht fälschlich als fehlendes Governance-Skript behandeln.
+globalThis.KF001_GOVERNANCE_LOADED = true;
+
 const yesNo = (value) => value ? 'YES' : 'NO';
 const esc = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 
@@ -33,6 +37,10 @@ function centralWriteLive() {
     ownerAuth?.connected &&
     ownerAuthState.enrolled
   );
+}
+
+function decisionStillOpen() {
+  return ['PENDING_APPROVAL', 'APPROVED_PENDING_DISPATCH'].includes(ownerState?.status);
 }
 
 function renderSystemStatus() {
@@ -116,10 +124,11 @@ function renderOwnerGate() {
   const container = document.getElementById('ownerGateContainer');
   const centralRead = ownerState.isSourceOfTruth;
   const centralWrite = centralWriteLive();
+  const canDecide = centralWrite && decisionStillOpen();
   container.className = 'bg-gradient-to-br from-amber-950/40 via-slate-800 to-slate-900 p-4 sm:p-5 rounded-2xl border border-amber-500/40 shadow-lg space-y-4';
   container.innerHTML = `
     <div class="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/20 pb-3">
-      <span class="px-2.5 py-1 rounded-md text-xs font-black bg-amber-500/20 text-amber-300 border border-amber-500/40">OWNER GATE 1 · ${centralWrite ? 'LIVE' : 'READ ONLY'}</span>
+      <span class="px-2.5 py-1 rounded-md text-xs font-black bg-amber-500/20 text-amber-300 border border-amber-500/40">OWNER GATE 1 · ${canDecide ? 'LIVE' : 'LOCKED'}</span>
       <span id="gateStateChip" class="text-[10px] font-mono text-amber-300 bg-slate-950 px-2 py-1 rounded border border-amber-500/30">${esc(ownerState.status)}</span>
     </div>
     <div class="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
@@ -134,18 +143,22 @@ function renderOwnerGate() {
       <span class="block text-[10px] text-slate-400 font-mono mb-1">VORBEREITETE OUTREACH-NACHRICHT · ÖFFENTLICH ABSTRAHIERT</span>
       <p class="text-xs text-slate-200 leading-relaxed">${esc(ownerState.outreachMessage)}</p>
     </div>
-    <div id="gateTruth" class="p-3 rounded-xl border ${centralWrite ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-200' : 'bg-amber-950/30 border-amber-500/30 text-amber-200'} text-[11px]">
-      ${centralWrite
-        ? 'OWNER WRITE = LIVE. Jede Entscheidung verlangt eine Passkey-Bestätigung und wird danach autoritativ in D1 gespeichert. Kein Versand wird ausgelöst.'
-        : centralRead
-          ? `CENTRAL READ = LIVE. OWNER WRITE = NOT LIVE. ${ownerAuthState.enrolled ? 'Owner-Auth ist noch nicht vollständig verfügbar.' : 'Zuerst Owner-Passkey registrieren.'}`
-          : 'CENTRAL BACKEND = NO. Keine zentrale Owner-Entscheidung möglich.'}
+    <div id="gateTruth" class="p-3 rounded-xl border ${canDecide ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-200' : 'bg-amber-950/30 border-amber-500/30 text-amber-200'} text-[11px]">
+      ${ownerState.status === 'DISPATCHED'
+        ? 'OUTREACH = DISPATCHED. Gate 1 ist abgeschlossen; eine erneute Freigabe ist gesperrt.'
+        : ownerState.status === 'REJECTED'
+          ? 'OUTREACH = REJECTED. Gate 1 ist abgeschlossen; es erfolgt kein Versand.'
+          : canDecide
+            ? `OWNER WRITE = LIVE. Jede Entscheidung verlangt eine Passkey-Bestätigung und wird autoritativ in D1 gespeichert.${outreach.realDispatchConnected ? ' APPROVE löst anschließend den echten Outreach-Versand aus.' : ' REAL OUTREACH DISPATCH ist derzeit nicht live.'}`
+            : centralRead
+              ? `CENTRAL READ = LIVE. OWNER WRITE = NOT LIVE. ${ownerAuthState.enrolled ? 'Owner-Auth ist noch nicht vollständig verfügbar.' : 'Zuerst Owner-Passkey registrieren.'}`
+              : 'CENTRAL BACKEND = NO. Keine zentrale Owner-Entscheidung möglich.'}
     </div>
     <div id="gateActionButtons" class="grid grid-cols-2 gap-2">
-      <button id="approveIntentBtn" ${centralWrite ? '' : 'disabled'} class="py-3 px-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs rounded-lg shadow transition-all">✅ APPROVE</button>
-      <button id="rejectIntentBtn" ${centralWrite ? '' : 'disabled'} class="py-3 px-3 bg-rose-600/30 hover:bg-rose-600/50 disabled:opacity-40 disabled:cursor-not-allowed text-rose-300 font-bold text-xs rounded-lg border border-rose-500/40 transition-all">🛑 REJECT</button>
+      <button id="approveIntentBtn" ${canDecide ? '' : 'disabled'} class="py-3 px-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs rounded-lg shadow transition-all">✅ APPROVE</button>
+      <button id="rejectIntentBtn" ${canDecide ? '' : 'disabled'} class="py-3 px-3 bg-rose-600/30 hover:bg-rose-600/50 disabled:opacity-40 disabled:cursor-not-allowed text-rose-300 font-bold text-xs rounded-lg border border-rose-500/40 transition-all">🛑 REJECT</button>
     </div>`;
-  if (centralWrite) {
+  if (canDecide) {
     document.getElementById('approveIntentBtn').addEventListener('click', () => decide('APPROVE'));
     document.getElementById('rejectIntentBtn').addEventListener('click', () => decide('REJECT'));
   }
@@ -162,15 +175,33 @@ async function decide(decision) {
     const result = await outreach.submitApprovalIntent({ caseId: ownerState.caseId, decision, version: ownerState.version });
     ownerState = { ...ownerState, ...result };
     const truth = document.getElementById('gateTruth');
-    document.getElementById('gateStateChip').textContent = result.status;
-    truth.className = 'p-3 rounded-xl border text-[11px] bg-emerald-950/30 border-emerald-500/30 text-emerald-200';
-    truth.textContent = `Approval-Intent zentral gespeichert. Status: ${result.status}. Ein Versand wurde nicht ausgeführt.`;
-    addLog(`OWNER GATE 1: ${decision} → ${result.status}; SOURCE=${result.stateSource}; DISPATCH_EXECUTED=NO`, 'SYNCED');
+    const stateChip = document.getElementById('gateStateChip');
+    if (stateChip) stateChip.textContent = result.status;
+
+    if (decision === 'REJECT') {
+      truth.className = 'p-3 rounded-xl border text-[11px] bg-slate-950 border-slate-700 text-slate-300';
+      truth.textContent = `Owner-Entscheidung zentral gespeichert. Status: ${result.status}. Kein Versand.`;
+      addLog(`OWNER GATE 1: REJECT → ${result.status}; SOURCE=${result.stateSource}`, 'SYNCED');
+    } else if (result.dispatchExecuted === true) {
+      truth.className = 'p-3 rounded-xl border text-[11px] bg-emerald-950/30 border-emerald-500/30 text-emerald-200';
+      truth.textContent = `Approval zentral gespeichert. Status: ${result.status}. Outreach wurde${result.dispatchProvider ? ` über ${result.dispatchProvider}` : ''} versendet.`;
+      addLog(`OWNER GATE 1: APPROVE → ${result.status}; DISPATCH_EXECUTED=YES; PROVIDER=${result.dispatchProvider || 'UNKNOWN'}`, 'DISPATCHED');
+    } else {
+      truth.className = 'p-3 rounded-xl border text-[11px] bg-amber-950/30 border-amber-500/30 text-amber-200';
+      truth.textContent = `Approval zentral gespeichert. Status: ${result.status}. Versand nicht ausgeführt${result.dispatchError ? `: ${result.dispatchError}` : '.'}`;
+      addLog(`OWNER GATE 1: APPROVE → ${result.status}; DISPATCH_EXECUTED=NO${result.dispatchError ? `; ERROR=${result.dispatchError}` : ''}`, 'PENDING');
+    }
+
+    await outreach.refreshStatus().catch(() => false);
     renderSystemStatus();
+    renderOwnerGate();
   } catch (error) {
     document.getElementById('gateTruth').textContent = `Entscheidung nicht gespeichert: ${error.message}`;
   } finally {
-    buttons.querySelectorAll('button').forEach((button) => { button.disabled = !centralWriteLive(); button.classList.remove('opacity-50'); });
+    buttons.querySelectorAll('button').forEach((button) => {
+      button.disabled = !(centralWriteLive() && decisionStillOpen());
+      button.classList.remove('opacity-50');
+    });
   }
 }
 
@@ -254,7 +285,7 @@ function retireDemoControls() {
     centralAuditStatus.className = `${ownerState?.isSourceOfTruth ? 'text-emerald-400' : 'text-amber-400'} font-bold`;
   }
   const version = document.querySelector('header h1 + span');
-  if (version) version.textContent = 'v1.5 OWNER WEBAUTHN';
+  if (version) version.textContent = 'v1.5.2 OWNER WEBAUTHN + GMAIL';
 }
 
 async function initGovernance() {
@@ -262,13 +293,13 @@ async function initGovernance() {
   if (ownerAuth?.connected) {
     ownerAuthState = await ownerAuth.status().catch(() => ({ enrolled: false, credentialCount: 0, verified: false }));
   }
+  await outreach.refreshStatus().catch(() => false);
   retireDemoControls();
   renderSystemStatus();
   renderOwnerAuth();
   renderOwnerGate();
   renderPreparedSystems();
   addLog(`GOVERNANCE UI: CENTRAL_BACKEND=${yesNo(ownerState.isSourceOfTruth)}; OWNER_WRITE=${yesNo(centralWriteLive())}; REAL_PUSH=${yesNo(notifications.pushBackendConnected)}; REAL_DISPATCH=${yesNo(outreach.realDispatchConnected)}`, 'TRUTHFUL');
-  globalThis.KF001_GOVERNANCE_LOADED = true;
 }
 
 if (document.readyState === 'loading') {
