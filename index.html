@@ -10,6 +10,17 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="KF-001 OS">
   
+  <script>
+    (function() {
+      const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+      const ticket = params.get('owner-enroll');
+      if (ticket && /^[A-Za-z0-9_-]{43,128}$/.test(ticket)) {
+        window.KF001_BOOTSTRAP_STATE = { enrollmentTicket: ticket };
+        window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+      }
+    })();
+  </script>
+
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" href="./app-icon.svg" sizes="any" type="image/svg+xml">
 
@@ -1096,6 +1107,7 @@
       });
     }
   </script>
+  <script src="./owner-auth.js?v=1.6.0"></script>
   <script src="./adapters.js?v=1.4.4"></script>
   <script src="./governance.js?v=1.5.1"></script>
   <script>
