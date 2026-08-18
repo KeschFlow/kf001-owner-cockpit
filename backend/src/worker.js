@@ -1,4 +1,4 @@
-import {
+﻿import {
   authenticationOptions,
   ownerStatus,
   registrationOptions,
@@ -371,7 +371,14 @@ export default {
     }
 
     if (request.method === 'POST' && url.pathname === '/v1/approval-intents') {
-      return handleApprovalIntent(request, env);
+      const response = await handleApprovalIntent(request, env);
+      const headers = new Headers(response.headers);
+      for (const [key, value] of Object.entries(cors)) headers.set(key, value);
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers
+      });
     }
 
     if (request.method === 'POST' && url.pathname === '/v1/push/subscriptions') {
@@ -381,3 +388,4 @@ export default {
     return json({ error: 'NOT_FOUND' }, 404, cors);
   }
 };
+
