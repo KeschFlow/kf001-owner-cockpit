@@ -36,6 +36,31 @@ async function ensureProductionSchema(env) {
     await env.CASE_DB.prepare('ALTER TABLE radar_candidates ADD COLUMN published_at TEXT').run();
   }
 
+  // Economic scores exist before a candidate is promoted into cases, so this table intentionally
+  // has no foreign key to cases. Migration 0008 mirrors this authoritative production shape.
+  await env.CASE_DB.prepare(`
+    CREATE TABLE IF NOT EXISTS case_economic_scores (
+      public_case_id TEXT PRIMARY KEY,
+      economic_score INTEGER NOT NULL,
+      economically_qualified INTEGER NOT NULL CHECK (economically_qualified IN (0, 1)),
+      solvability_score INTEGER NOT NULL,
+      payer_probability_score INTEGER NOT NULL,
+      reachability_score INTEGER NOT NULL,
+      evidence_score INTEGER NOT NULL,
+      platform_ack_score INTEGER NOT NULL,
+      recoverable_value_score INTEGER NOT NULL,
+      effort_score INTEGER NOT NULL,
+      uncertainty_score INTEGER NOT NULL,
+      proprietary_data_value_score INTEGER NOT NULL,
+      reference_value_score INTEGER NOT NULL,
+      amount_currency TEXT,
+      amount_native REAL NOT NULL DEFAULT 0,
+      amount_approx_usd REAL NOT NULL DEFAULT 0,
+      scoring_version TEXT NOT NULL,
+      selected_at TEXT,
+      updated_at TEXT NOT NULL
+    )
+  `).run();
   await ensureEconomicSelectionSchema(env);
 
   const retired = await env.CASE_DB.prepare(`
@@ -88,14 +113,47 @@ async function healthWithRadar(request, env, ctx) {
   }, baseResponse.status, Object.fromEntries(headers.entries()));
 }
 
+async function suppressUneconomicPendingGate(env, economicResult) {
+  if (economicResult?.reason !== 'NO_ECONOMICALLY_QUALIFIED_CASE') return false;
+  const active = await env.CASE_DB.prepare(`
+    SELECT c.public_case_id
+      FROM cases c
+      LEFT JOIN case_economic_scores e ON e.public_case_id = c.public_case_id
+     WHERE c.is_active = 1
+       AND c.status = 'PENDING_APPROVAL'
+       AND COALESCE(e.economically_qualified, 0) = 0
+     LIMIT 1
+  `).first();
+  if (!active?.public_case_id) return false;
+
+  const now = new Date().toISOString();
+  await env.CASE_DB.batch([
+    env.CASE_DB.prepare(`
+      UPDATE cases SET is_active = 0, version = version + 1, updated_at = ?2
+      WHERE public_case_id = ?1 AND status = 'PENDING_APPROVAL'
+    `).bind(active.public_case_id, now),
+    env.CASE_DB.prepare(`
+      UPDATE radar_candidates SET status = 'DISCOVERED'
+      WHERE public_case_id = ?1 AND status = 'PROMOTED'
+    `).bind(active.public_case_id),
+    env.CASE_DB.prepare(`
+      INSERT INTO state_events (public_case_id, event_type, state, source, created_at)
+      VALUES (?1, 'ECONOMIC_GATE_SUPPRESSED', 'PENDING_APPROVAL', 'ECONOMIC_SELECTOR_V1', ?2)
+    `).bind(active.public_case_id, now)
+  ]);
+  return true;
+}
+
 async function executeRadarAndEconomicSelection(env) {
   const radarResult = await runRadarScan(env);
   const economicResult = await selectBestEconomicCandidate(env);
+  const suppressedUneconomicGate = await suppressUneconomicPendingGate(env, economicResult);
   return {
     ...radarResult,
     rawPromotedCaseId: radarResult.promotedCaseId || null,
-    promotedCaseId: economicResult.selectedCaseId || radarResult.promotedCaseId || null,
-    economicSelection: economicResult
+    promotedCaseId: suppressedUneconomicGate ? null : (economicResult.selectedCaseId || radarResult.promotedCaseId || null),
+    economicSelection: economicResult,
+    suppressedUneconomicGate
   };
 }
 
