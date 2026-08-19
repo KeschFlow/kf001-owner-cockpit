@@ -1,6 +1,11 @@
 import baseWorker from './worker.js';
 import { verifyOwnerAssertion } from './webauthn.js';
 import { privateCaseDetail, radarStatus, runRadarScan } from './radar.js';
+import {
+  economicSelectionStatus,
+  ensureEconomicSelectionSchema,
+  selectBestEconomicCandidate
+} from './economic-selector.js';
 
 const json = (body, status = 200, extraHeaders = {}) => new Response(JSON.stringify(body), {
   status,
@@ -31,6 +36,8 @@ async function ensureProductionSchema(env) {
     await env.CASE_DB.prepare('ALTER TABLE radar_candidates ADD COLUMN published_at TEXT').run();
   }
 
+  await ensureEconomicSelectionSchema(env);
+
   const retired = await env.CASE_DB.prepare(`
     UPDATE cases
        SET status = 'REJECTED',
@@ -53,9 +60,11 @@ async function healthWithRadar(request, env, ctx) {
   const baseResponse = await baseWorker.fetch(request, env, ctx);
   const payload = await baseResponse.json().catch(() => ({}));
   let radar;
+  let economicSelection = null;
   try {
     await ensureProductionSchema(env);
     radar = await radarStatus(env);
+    economicSelection = await economicSelectionStatus(env);
   } catch (error) {
     radar = { live: false, lastRunAt: null, lastRunError: error.message || 'RADAR_STATUS_FAILED' };
   }
@@ -69,8 +78,25 @@ async function healthWithRadar(request, env, ctx) {
     radarLastQualified: radar.lastQualified || 0,
     radarLastContactable: radar.lastContactable || 0,
     radarReadyCandidates: radar.readyCandidates || 0,
-    radarLastPromotedCaseId: radar.lastPromotedCaseId || null
+    radarLastPromotedCaseId: radar.lastPromotedCaseId || null,
+    economicSelector: economicSelection ? 'LIVE' : 'NO_SCORED_CASES',
+    economicWinnerCaseId: economicSelection?.caseId || null,
+    economicWinnerScore: economicSelection?.economicScore || null,
+    economicWinnerQualified: economicSelection?.economicallyQualified || false,
+    economicWinnerApproxUsd: economicSelection?.amountApproxUsd || 0,
+    economicScoringVersion: economicSelection?.scoringVersion || null
   }, baseResponse.status, Object.fromEntries(headers.entries()));
+}
+
+async function executeRadarAndEconomicSelection(env) {
+  const radarResult = await runRadarScan(env);
+  const economicResult = await selectBestEconomicCandidate(env);
+  return {
+    ...radarResult,
+    rawPromotedCaseId: radarResult.promotedCaseId || null,
+    promotedCaseId: economicResult.selectedCaseId || radarResult.promotedCaseId || null,
+    economicSelection: economicResult
+  };
 }
 
 async function handleOwnerRadarRun(request, env) {
@@ -79,7 +105,7 @@ async function handleOwnerRadarRun(request, env) {
   try {
     await verifyOwnerAssertion(env, body?.auth, 'RADAR_SCAN', null);
     await ensureProductionSchema(env);
-    const result = await runRadarScan(env);
+    const result = await executeRadarAndEconomicSelection(env);
     return json(result, 200, cors);
   } catch (error) {
     const code = String(error.message || '').startsWith('WEBAUTHN_') || String(error.message || '').startsWith('OWNER_') ? 401 : 500;
@@ -98,7 +124,37 @@ async function handlePrivateCaseRead(request, env) {
     await ensureProductionSchema(env);
     const detail = await privateCaseDetail(env, caseId);
     if (!detail) return json({ error: 'PRIVATE_CASE_NOT_FOUND' }, 404, cors);
-    return json(detail, 200, cors);
+    const economic = await env.CASE_DB.prepare(`
+      SELECT economic_score, economically_qualified, solvability_score,
+             payer_probability_score, reachability_score, evidence_score,
+             platform_ack_score, recoverable_value_score, effort_score,
+             uncertainty_score, proprietary_data_value_score, reference_value_score,
+             amount_currency, amount_native, amount_approx_usd, scoring_version, selected_at
+        FROM case_economic_scores
+       WHERE public_case_id = ?1
+    `).bind(caseId).first();
+    return json({
+      ...detail,
+      economic: economic ? {
+        economicScore: Number(economic.economic_score || 0),
+        economicallyQualified: Number(economic.economically_qualified || 0) === 1,
+        solvability: Number(economic.solvability_score || 0),
+        payerProbability: Number(economic.payer_probability_score || 0),
+        reachability: Number(economic.reachability_score || 0),
+        evidence: Number(economic.evidence_score || 0),
+        platformAck: Number(economic.platform_ack_score || 0),
+        recoverableValue: Number(economic.recoverable_value_score || 0),
+        effort: Number(economic.effort_score || 0),
+        uncertainty: Number(economic.uncertainty_score || 0),
+        proprietaryDataValue: Number(economic.proprietary_data_value_score || 0),
+        referenceValue: Number(economic.reference_value_score || 0),
+        amountCurrency: economic.amount_currency || null,
+        amountNative: Number(economic.amount_native || 0),
+        amountApproxUsd: Number(economic.amount_approx_usd || 0),
+        scoringVersion: economic.scoring_version,
+        selectedAt: economic.selected_at || null
+      } : null
+    }, 200, cors);
   } catch (error) {
     const code = String(error.message || '').startsWith('WEBAUTHN_') || String(error.message || '').startsWith('OWNER_') ? 401 : 500;
     return json({ error: error.message || 'PRIVATE_CASE_READ_FAILED' }, code, cors);
@@ -133,7 +189,7 @@ export default {
   async scheduled(controller, env, ctx) {
     ctx.waitUntil((async () => {
       await ensureProductionSchema(env);
-      await runRadarScan(env);
+      await executeRadarAndEconomicSelection(env);
     })());
   }
 };
