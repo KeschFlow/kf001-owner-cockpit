@@ -59,20 +59,29 @@ async function saveChallenge(env, purpose, payload = null) {
   return { challengeId, challenge };
 }
 
-async function takeChallenge(env, challengeId, purpose, payload = null) {
+async function loadChallenge(env, challengeId, purpose, payload = null) {
   const row = await env.CASE_DB.prepare(`
-    SELECT challenge_id, challenge, purpose, payload_hash, expires_at
-    FROM webauthn_challenges WHERE challenge_id = ?1
+    SELECT challenge_id, challenge, purpose, payload_hash, expires_at, consumed_at
+    FROM webauthn_challenges
+    WHERE challenge_id = ?1 AND consumed_at IS NULL
   `).bind(challengeId).first();
-  if (!row) throw new Error('WEBAUTHN_CHALLENGE_NOT_FOUND');
-  await env.CASE_DB.prepare('DELETE FROM webauthn_challenges WHERE challenge_id = ?1').bind(challengeId).run();
+  if (!row) throw new Error('WEBAUTHN_CHALLENGE_NOT_FOUND_OR_CONSUMED');
   if (row.purpose !== purpose) throw new Error('WEBAUTHN_PURPOSE_MISMATCH');
   if (Date.parse(row.expires_at) < Date.now()) throw new Error('WEBAUTHN_CHALLENGE_EXPIRED');
   if (payload !== null) {
     const hash = await payloadHash(payload);
     if (hash !== row.payload_hash) throw new Error('WEBAUTHN_PAYLOAD_MISMATCH');
   }
-  return row.challenge;
+  return row;
+}
+
+async function consumeChallenge(env, challengeId) {
+  const result = await env.CASE_DB.prepare(`
+    UPDATE webauthn_challenges
+       SET consumed_at = ?2
+     WHERE challenge_id = ?1 AND consumed_at IS NULL
+  `).bind(challengeId, new Date().toISOString()).run();
+  if (Number(result.meta?.changes || 0) !== 1) throw new Error('WEBAUTHN_CHALLENGE_RACE_CONSUMED');
 }
 
 function parseClientData(clientDataJSON) {
@@ -181,7 +190,8 @@ export async function verifyRegistration(request, env, body) {
   assertBootstrap(request, env);
   const status = await ownerStatus(env);
   if (status.enrolled) throw new Error('OWNER_ALREADY_ENROLLED');
-  const expectedChallenge = await takeChallenge(env, body.challengeId, 'OWNER_REGISTER');
+  const challengeRow = await loadChallenge(env, body.challengeId, 'OWNER_REGISTER');
+  const expectedChallenge = challengeRow.challenge;
   const response = body.response || {};
   await verifyClientData(response.response?.clientDataJSON, 'webauthn.create', expectedChallenge, env);
   await verifyAuthenticatorData(response.response?.authenticatorData, env, true);
@@ -189,6 +199,7 @@ export async function verifyRegistration(request, env, body) {
   const algorithm = Number(response.response?.publicKeyAlgorithm);
   const publicKey = fromB64url(response.response?.publicKey);
   if (!credentialId || !publicKey.length || ![-7, -257].includes(algorithm)) throw new Error('WEBAUTHN_REGISTRATION_DATA_INVALID');
+  await consumeChallenge(env, body.challengeId);
   const now = new Date().toISOString();
   await env.CASE_DB.prepare(`
     INSERT INTO owner_credentials (credential_id, public_key_spki, algorithm, counter, transports, created_at, updated_at)
@@ -219,7 +230,8 @@ export async function authenticationOptions(env, purpose, payload = null) {
 
 export async function verifyOwnerAssertion(env, auth, purpose, payload = null) {
   if (!auth?.challengeId || !auth?.response?.id) throw new Error('WEBAUTHN_ASSERTION_MISSING');
-  const expectedChallenge = await takeChallenge(env, auth.challengeId, purpose, payload);
+  const challengeRow = await loadChallenge(env, auth.challengeId, purpose, payload);
+  const expectedChallenge = challengeRow.challenge;
   const response = auth.response;
   const credential = await env.CASE_DB.prepare(`
     SELECT credential_id, public_key_spki, algorithm, counter, transports
@@ -240,6 +252,7 @@ export async function verifyOwnerAssertion(env, auth, purpose, payload = null) {
   if (!verified) throw new Error('WEBAUTHN_SIGNATURE_INVALID');
   const oldCounter = Number(credential.counter || 0);
   if (oldCounter > 0 && authData.counter <= oldCounter) throw new Error('WEBAUTHN_COUNTER_INVALID');
+  await consumeChallenge(env, auth.challengeId);
   await env.CASE_DB.prepare('UPDATE owner_credentials SET counter = ?2, updated_at = ?3 WHERE credential_id = ?1')
     .bind(credential.credential_id, authData.counter, new Date().toISOString()).run();
   return { verified: true, credentialId: credential.credential_id };
