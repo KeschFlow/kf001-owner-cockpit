@@ -1,4 +1,4 @@
-﻿import {
+import {
   authenticationOptions,
   ownerStatus,
   registrationOptions,
@@ -178,7 +178,7 @@ async function upsertDispatchTarget(request, env) {
   return json({ accepted: true, caseId: body.caseId, targetStored: true }, 202);
 }
 
-async function executeDispatch(env, caseId) {
+async function executeDispatch(env, caseId, approvalVersion) {
   if (!gmailConfigured(env)) return { executed: false, error: 'GMAIL_NOT_CONFIGURED' };
   const target = await env.CASE_DB.prepare(`
     SELECT recipient_email, recipient_name, subject
@@ -190,39 +190,80 @@ async function executeDispatch(env, caseId) {
   if (!state || state.caseId !== caseId) return { executed: false, error: 'ACTIVE_CASE_MISMATCH' };
   const subject = target.subject || `KF-001 ${caseId}`;
   const body = state.outreachMessage;
+  const operationKey = `${caseId}:${approvalVersion}`;
+  const claimToken = crypto.randomUUID();
   const now = new Date().toISOString();
 
+  let ownsClaim = false;
   try {
-    const sent = await sendGmail(env, {
-      to: target.recipient_email,
-      subject,
-      text: body
-    });
-    await env.CASE_DB.batch([
-      env.CASE_DB.prepare(`
-        UPDATE cases
-        SET status = 'DISPATCHED', version = version + 1, updated_at = ?2
-        WHERE public_case_id = ?1 AND is_active = 1
-      `).bind(caseId, now),
-      env.CASE_DB.prepare(`
-        INSERT INTO state_events (public_case_id, event_type, state, source, created_at)
-        VALUES (?1, 'OUTREACH_DISPATCHED', 'DISPATCHED', 'GMAIL_API', ?2)
-      `).bind(caseId, now),
-      env.CASE_DB.prepare(`
-        INSERT INTO dispatch_log (
-          public_case_id, provider, provider_message_id, recipient_email, status, error_code, created_at
-        ) VALUES (?1, 'GMAIL', ?2, ?3, 'SENT', NULL, ?4)
-      `).bind(caseId, sent.id, target.recipient_email, now)
-    ]);
-    return { executed: true, provider: 'GMAIL', messageId: sent.id };
+    await env.CASE_DB.prepare(`
+      INSERT INTO dispatch_operations (operation_key, public_case_id, approval_version, recipient_email, status, claim_token, created_at, updated_at)
+      VALUES (?1, ?2, ?3, ?4, 'CLAIMED', ?5, ?6, ?6)
+    `).bind(operationKey, caseId, approvalVersion, target.recipient_email, claimToken, now).run();
+    ownsClaim = true;
+  } catch {
+    const existing = await env.CASE_DB.prepare(`
+      SELECT operation_key, status, claim_token, provider_message_id, updated_at
+      FROM dispatch_operations WHERE operation_key = ?1
+    `).bind(operationKey).first();
+    if (!existing) return { executed: false, error: 'DISPATCH_CLAIM_FAILED' };
+    if (existing.status === 'SENT') return { executed: true, provider: 'GMAIL', messageId: existing.provider_message_id, replayed: true };
+    if (existing.status === 'SENDING' || existing.status === 'UNKNOWN') return { executed: false, error: 'DISPATCH_REVIEW_REQUIRED', reviewRequired: true };
+    const updated = Date.parse(existing.updated_at || '');
+    const staleClaim = existing.status === 'CLAIMED' && Number.isFinite(updated) && Date.now() - updated > 60000;
+    if (existing.status === 'FAILED_PRE_SEND' || staleClaim) {
+      const reclaimed = await env.CASE_DB.prepare(`
+        UPDATE dispatch_operations
+           SET status = 'CLAIMED', claim_token = ?2, error_code = NULL, updated_at = ?3
+         WHERE operation_key = ?1 AND claim_token = ?4 AND status IN ('CLAIMED','FAILED_PRE_SEND')
+      `).bind(operationKey, claimToken, now, existing.claim_token).run();
+      ownsClaim = Number(reclaimed.meta?.changes || 0) === 1;
+    }
+    if (!ownsClaim) return { executed: false, error: 'DISPATCH_IN_PROGRESS' };
+  }
+
+  const sending = await env.CASE_DB.prepare(`
+    UPDATE dispatch_operations SET status = 'SENDING', updated_at = ?3
+    WHERE operation_key = ?1 AND claim_token = ?2 AND status = 'CLAIMED'
+  `).bind(operationKey, claimToken, new Date().toISOString()).run();
+  if (Number(sending.meta?.changes || 0) !== 1) return { executed: false, error: 'DISPATCH_CLAIM_LOST' };
+
+  let sent;
+  try {
+    sent = await sendGmail(env, { to: target.recipient_email, subject, text: body });
   } catch (error) {
     await env.CASE_DB.prepare(`
-      INSERT INTO dispatch_log (
-        public_case_id, provider, provider_message_id, recipient_email, status, error_code, created_at
-      ) VALUES (?1, 'GMAIL', NULL, ?2, 'FAILED', ?3, ?4)
-    `).bind(caseId, target.recipient_email, String(error.message || 'GMAIL_SEND_FAILED').slice(0, 120), now).run();
-    return { executed: false, error: error.message || 'GMAIL_SEND_FAILED' };
+      UPDATE dispatch_operations SET status = 'UNKNOWN', error_code = ?2, updated_at = ?3
+      WHERE operation_key = ?1 AND claim_token = ?4 AND status = 'SENDING'
+    `).bind(operationKey, String(error.message || 'GMAIL_SEND_FAILED').slice(0, 120), new Date().toISOString(), claimToken).run();
+    return { executed: false, error: error.message || 'GMAIL_SEND_FAILED', reviewRequired: true };
   }
+
+  const sentAt = new Date().toISOString();
+  await env.CASE_DB.prepare(`
+    UPDATE dispatch_operations SET status = 'SENT', provider_message_id = ?2, error_code = NULL, updated_at = ?3
+    WHERE operation_key = ?1 AND claim_token = ?4 AND status = 'SENDING'
+  `).bind(operationKey, sent.id, sentAt, claimToken).run();
+
+  await env.CASE_DB.batch([
+    env.CASE_DB.prepare(`
+      UPDATE cases SET status = 'DISPATCHED', version = version + 1, updated_at = ?2
+      WHERE public_case_id = ?1 AND is_active = 1
+    `).bind(caseId, sentAt),
+    env.CASE_DB.prepare(`
+      INSERT INTO state_events (public_case_id, event_type, state, source, created_at)
+      SELECT ?1, 'OUTREACH_DISPATCHED', 'DISPATCHED', 'GMAIL_API', ?2
+      WHERE NOT EXISTS (
+        SELECT 1 FROM state_events
+        WHERE public_case_id = ?1 AND event_type = 'OUTREACH_DISPATCHED' AND created_at = ?2
+      )
+    `).bind(caseId, sentAt),
+    env.CASE_DB.prepare(`
+      INSERT OR IGNORE INTO dispatch_log (public_case_id, provider, provider_message_id, recipient_email, status, error_code, created_at)
+      VALUES (?1, 'GMAIL', ?2, ?3, 'SENT', NULL, ?4)
+    `).bind(caseId, sent.id, target.recipient_email, sentAt)
+  ]);
+  return { executed: true, provider: 'GMAIL', messageId: sent.id };
 }
 
 async function handleApprovalIntent(request, env) {
@@ -264,7 +305,7 @@ async function handleApprovalIntent(request, env) {
   `).bind(intent.caseId, newStatus, now).run();
 
   let dispatch = { executed: false };
-  if (intent.decision === 'APPROVE') dispatch = await executeDispatch(env, intent.caseId);
+  if (intent.decision === 'APPROVE') dispatch = await executeDispatch(env, intent.caseId, expectedVersion + 1);
 
   const state = await readOwnerState(env);
   return json({
@@ -388,4 +429,3 @@ export default {
     return json({ error: 'NOT_FOUND' }, 404, cors);
   }
 };
-

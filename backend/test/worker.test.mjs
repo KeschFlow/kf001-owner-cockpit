@@ -31,17 +31,18 @@ function env() {
   };
 }
 
-test('health truthfully reports D1 live and push/dispatch not live', async () => {
+test('health truthfully reports D1 live and current feature readiness', async () => {
   const response = await worker.fetch(new Request('https://worker.test/health'), env());
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
-    ok: true,
-    service: 'kf001-owner-backend',
-    centralState: 'LIVE',
-    d1SourceOfTruth: 'LIVE',
-    realPush: 'NOT_LIVE',
-    realOutreachDispatch: 'NOT_LIVE'
-  });
+  const body = await response.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.service, 'kf001-owner-backend');
+  assert.equal(body.centralState, 'LIVE');
+  assert.equal(body.d1SourceOfTruth, 'LIVE');
+  assert.equal(body.ownerWrite, 'READY_FOR_ENROLLMENT');
+  assert.equal(body.ownerCredentialCount, 0);
+  assert.equal(body.realPush, 'NOT_LIVE');
+  assert.equal(body.realOutreachDispatch, 'NOT_LIVE');
 });
 
 test('owner state comes from D1 and allows only the public PWA origin', async () => {
@@ -64,10 +65,10 @@ test('radar writes require the Worker secret', async () => {
   assert.equal(response.status, 401);
 });
 
-test('approval and push stay explicitly not live', async () => {
+test('approval validates input while push stays explicitly not live', async () => {
   const approval = await worker.fetch(new Request('https://worker.test/v1/approval-intents', { method: 'POST' }), env());
   const push = await worker.fetch(new Request('https://worker.test/v1/push/subscriptions', { method: 'POST' }), env());
-  assert.equal(approval.status, 503);
+  assert.equal(approval.status, 400);
   assert.equal((await approval.json()).dispatchExecuted, false);
   assert.equal(push.status, 503);
 });
