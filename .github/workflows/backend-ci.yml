@@ -2,7 +2,7 @@ name: Backend CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, economic-selection-v1]
     paths:
       - 'backend/**'
       - '.github/workflows/backend-ci.yml'
