@@ -16,10 +16,14 @@ test('qualified cases without contacts are enriched from public business website
   assert.match(enrichment, /contact|support|impressum|imprint/);
 });
 
-test('manual radar performs contact enrichment before final economic selection', () => {
+test('autonomy sidecar enriches contacts and then re-runs economic selection without blocking manual radar', () => {
+  assert.match(workerV3, /async function runAutonomySidecar/);
   assert.match(workerV3, /enrichQualifiedContacts\(env\)/);
   assert.match(workerV3, /selectBestEconomicCandidate\(env\)/);
-  assert.match(workerV3, /postEnrichmentEconomicSelection/);
+  assert.match(workerV3, /ctx\.waitUntil\(runAutonomySidecar\(env\)\)/);
+  assert.match(workerV3, /return response;/);
+  assert.doesNotMatch(workerV3, /postEnrichmentEconomicSelection/);
+  assert.doesNotMatch(workerV3, /return await enrichAfterManualRadar/);
 });
 
 test('production entrypoint uses worker v3', () => {
