@@ -55,8 +55,6 @@ function rp(env) {
   return {
     id: env.WEBAUTHN_RP_ID || hostname,
     name: env.WEBAUTHN_RP_NAME || 'KF-001 Owner Cockpit',
-    // PUBLIC_APP_ORIGIN is the authoritative browser origin. Do not allow a stale
-    // WEBAUTHN_ORIGIN secret/config value to diverge from the actual GitHub Pages origin.
     origin
   };
 }
@@ -128,7 +126,7 @@ async function verifyAuthenticatorData(authenticatorDataB64, env, requireUV = tr
   return { bytes, counter };
 }
 
-function derEcdsaToRaw(signature) {
+export function derEcdsaToRaw(signature) {
   const bytes = signature instanceof Uint8Array ? signature : new Uint8Array(signature);
   if (bytes[0] !== 0x30) return bytes;
   let offset = 2;
@@ -142,9 +140,10 @@ function derEcdsaToRaw(signature) {
   let s = bytes.slice(offset + 2, offset + 2 + sLen);
   while (r.length > 32 && r[0] === 0) r = r.slice(1);
   while (s.length > 32 && s[0] === 0) s = s.slice(1);
+  if (r.length > 32 || s.length > 32) throw new Error('WEBAUTHN_ECDSA_SIGNATURE_INVALID');
   const raw = new Uint8Array(64);
   raw.set(r, 32 - r.length);
-  raw.set(s, 32 - s.length);
+  raw.set(s, 64 - s.length);
   return raw;
 }
 
