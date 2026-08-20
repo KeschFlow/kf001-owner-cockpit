@@ -1,5 +1,5 @@
 name = "kf001-owner-backend"
-main = "src/worker-v2.js"
+main = "src/worker-v3.js"
 compatibility_date = "2026-08-17"
 workers_dev = true
 
