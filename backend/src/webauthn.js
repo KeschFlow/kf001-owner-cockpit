@@ -38,11 +38,26 @@ export async function payloadHash(payload) {
   return sha256B64url(canonical(payload));
 }
 
+function normalizedPublicOrigin(env) {
+  if (!env.PUBLIC_APP_ORIGIN) throw new Error('WEBAUTHN_PUBLIC_ORIGIN_NOT_CONFIGURED');
+  try {
+    const url = new URL(String(env.PUBLIC_APP_ORIGIN));
+    if (url.protocol !== 'https:') throw new Error('HTTPS_REQUIRED');
+    return url.origin;
+  } catch {
+    throw new Error('WEBAUTHN_PUBLIC_ORIGIN_INVALID');
+  }
+}
+
 function rp(env) {
+  const origin = normalizedPublicOrigin(env);
+  const hostname = new URL(origin).hostname;
   return {
-    id: env.WEBAUTHN_RP_ID,
+    id: env.WEBAUTHN_RP_ID || hostname,
     name: env.WEBAUTHN_RP_NAME || 'KF-001 Owner Cockpit',
-    origin: env.WEBAUTHN_ORIGIN
+    // PUBLIC_APP_ORIGIN is the authoritative browser origin. Do not allow a stale
+    // WEBAUTHN_ORIGIN secret/config value to diverge from the actual GitHub Pages origin.
+    origin
   };
 }
 
@@ -129,7 +144,7 @@ function derEcdsaToRaw(signature) {
   while (s.length > 32 && s[0] === 0) s = s.slice(1);
   const raw = new Uint8Array(64);
   raw.set(r, 32 - r.length);
-  raw.set(s, 64 - s.length);
+  raw.set(s, 32 - s.length);
   return raw;
 }
 
