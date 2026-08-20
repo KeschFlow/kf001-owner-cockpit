@@ -7,6 +7,9 @@ import {
   selectBestEconomicCandidate
 } from './economic-selector.js';
 
+const ECONOMIC_SCORING_VERSION = 'ECON_V1';
+const MIN_ECONOMIC_SCORE = 72;
+
 const json = (body, status = 200, extraHeaders = {}) => new Response(JSON.stringify(body), {
   status,
   headers: {
@@ -36,8 +39,6 @@ async function ensureProductionSchema(env) {
     await env.CASE_DB.prepare('ALTER TABLE radar_candidates ADD COLUMN published_at TEXT').run();
   }
 
-  // Economic scores exist before a candidate is promoted into cases, so this table intentionally
-  // has no foreign key to cases. Migration 0008 mirrors this authoritative production shape.
   await env.CASE_DB.prepare(`
     CREATE TABLE IF NOT EXISTS case_economic_scores (
       public_case_id TEXT PRIMARY KEY,
@@ -81,13 +82,68 @@ async function ensureProductionSchema(env) {
   }
 }
 
+function economicRowIsApprovalQualified(row) {
+  return Boolean(row)
+    && Number(row.economically_qualified || 0) === 1
+    && Number(row.economic_score || 0) >= MIN_ECONOMIC_SCORE
+    && String(row.scoring_version || '') === ECONOMIC_SCORING_VERSION
+    && Boolean(row.selected_at);
+}
+
+async function economicApprovalQualification(env, caseId) {
+  const row = await env.CASE_DB.prepare(`
+    SELECT public_case_id, economic_score, economically_qualified, scoring_version, selected_at,
+           solvability_score, payer_probability_score, reachability_score, evidence_score,
+           platform_ack_score, recoverable_value_score, proprietary_data_value_score,
+           reference_value_score, amount_currency, amount_native, amount_approx_usd
+      FROM case_economic_scores
+     WHERE public_case_id = ?1
+  `).bind(caseId).first();
+  return {
+    allowed: economicRowIsApprovalQualified(row),
+    row
+  };
+}
+
+async function suppressInvalidPendingGate(env) {
+  const active = await env.CASE_DB.prepare(`
+    SELECT c.public_case_id,
+           e.economic_score, e.economically_qualified, e.scoring_version, e.selected_at
+      FROM cases c
+      LEFT JOIN case_economic_scores e ON e.public_case_id = c.public_case_id
+     WHERE c.is_active = 1
+       AND c.status = 'PENDING_APPROVAL'
+     ORDER BY c.updated_at DESC
+     LIMIT 1
+  `).first();
+  if (!active?.public_case_id || economicRowIsApprovalQualified(active)) return false;
+
+  const now = new Date().toISOString();
+  await env.CASE_DB.batch([
+    env.CASE_DB.prepare(`
+      UPDATE cases SET is_active = 0, version = version + 1, updated_at = ?2
+      WHERE public_case_id = ?1 AND status = 'PENDING_APPROVAL' AND is_active = 1
+    `).bind(active.public_case_id, now),
+    env.CASE_DB.prepare(`
+      UPDATE radar_candidates SET status = 'DISCOVERED'
+      WHERE public_case_id = ?1 AND status = 'PROMOTED'
+    `).bind(active.public_case_id),
+    env.CASE_DB.prepare(`
+      INSERT INTO state_events (public_case_id, event_type, state, source, created_at)
+      VALUES (?1, 'ECONOMIC_GATE_HARD_BLOCKED', 'PENDING_APPROVAL', 'ECONOMIC_SELECTOR_V1', ?2)
+    `).bind(active.public_case_id, now)
+  ]);
+  return true;
+}
+
 async function healthWithRadar(request, env, ctx) {
+  await ensureProductionSchema(env);
+  await suppressInvalidPendingGate(env);
   const baseResponse = await baseWorker.fetch(request, env, ctx);
   const payload = await baseResponse.json().catch(() => ({}));
   let radar;
   let economicSelection = null;
   try {
-    await ensureProductionSchema(env);
     radar = await radarStatus(env);
     economicSelection = await economicSelectionStatus(env);
   } catch (error) {
@@ -105,55 +161,27 @@ async function healthWithRadar(request, env, ctx) {
     radarReadyCandidates: radar.readyCandidates || 0,
     radarLastPromotedCaseId: radar.lastPromotedCaseId || null,
     economicSelector: economicSelection ? 'LIVE' : 'NO_SCORED_CASES',
-    economicWinnerCaseId: economicSelection?.caseId || null,
-    economicWinnerScore: economicSelection?.economicScore || null,
-    economicWinnerQualified: economicSelection?.economicallyQualified || false,
-    economicWinnerApproxUsd: economicSelection?.amountApproxUsd || 0,
+    economicWinnerCaseId: economicSelection?.selectedAt ? economicSelection.caseId : null,
+    economicWinnerScore: economicSelection?.selectedAt ? economicSelection.economicScore : null,
+    economicWinnerQualified: Boolean(economicSelection?.selectedAt && economicSelection?.economicallyQualified),
+    economicWinnerApproxUsd: economicSelection?.selectedAt ? (economicSelection.amountApproxUsd || 0) : 0,
     economicScoringVersion: economicSelection?.scoringVersion || null
   }, baseResponse.status, Object.fromEntries(headers.entries()));
-}
-
-async function suppressUneconomicPendingGate(env, economicResult) {
-  if (economicResult?.reason !== 'NO_ECONOMICALLY_QUALIFIED_CASE') return false;
-  const active = await env.CASE_DB.prepare(`
-    SELECT c.public_case_id
-      FROM cases c
-      LEFT JOIN case_economic_scores e ON e.public_case_id = c.public_case_id
-     WHERE c.is_active = 1
-       AND c.status = 'PENDING_APPROVAL'
-       AND COALESCE(e.economically_qualified, 0) = 0
-     LIMIT 1
-  `).first();
-  if (!active?.public_case_id) return false;
-
-  const now = new Date().toISOString();
-  await env.CASE_DB.batch([
-    env.CASE_DB.prepare(`
-      UPDATE cases SET is_active = 0, version = version + 1, updated_at = ?2
-      WHERE public_case_id = ?1 AND status = 'PENDING_APPROVAL'
-    `).bind(active.public_case_id, now),
-    env.CASE_DB.prepare(`
-      UPDATE radar_candidates SET status = 'DISCOVERED'
-      WHERE public_case_id = ?1 AND status = 'PROMOTED'
-    `).bind(active.public_case_id),
-    env.CASE_DB.prepare(`
-      INSERT INTO state_events (public_case_id, event_type, state, source, created_at)
-      VALUES (?1, 'ECONOMIC_GATE_SUPPRESSED', 'PENDING_APPROVAL', 'ECONOMIC_SELECTOR_V1', ?2)
-    `).bind(active.public_case_id, now)
-  ]);
-  return true;
 }
 
 async function executeRadarAndEconomicSelection(env) {
   const radarResult = await runRadarScan(env);
   const economicResult = await selectBestEconomicCandidate(env);
-  const suppressedUneconomicGate = await suppressUneconomicPendingGate(env, economicResult);
+  const suppressedInvalidGate = await suppressInvalidPendingGate(env);
+  const selectedCaseId = !suppressedInvalidGate && economicResult?.score?.economicallyQualified
+    ? (economicResult.selectedCaseId || null)
+    : null;
   return {
     ...radarResult,
     rawPromotedCaseId: radarResult.promotedCaseId || null,
-    promotedCaseId: suppressedUneconomicGate ? null : (economicResult.selectedCaseId || radarResult.promotedCaseId || null),
+    promotedCaseId: selectedCaseId,
     economicSelection: economicResult,
-    suppressedUneconomicGate
+    suppressedInvalidGate
   };
 }
 
@@ -219,6 +247,36 @@ async function handlePrivateCaseRead(request, env) {
   }
 }
 
+async function hardGateApprovalRequest(request, env) {
+  const body = await request.clone().json().catch(() => null);
+  const intent = body?.intent;
+  if (intent?.decision !== 'APPROVE') return null;
+  const caseId = String(intent?.caseId || '');
+  if (!/^PUB-[A-Z0-9-]{3,40}$/.test(caseId)) {
+    return json({ error: 'INVALID_CASE_ID', dispatchExecuted: false }, 400, corsHeaders(request, env));
+  }
+
+  await ensureProductionSchema(env);
+  const active = await env.CASE_DB.prepare(`
+    SELECT public_case_id, status FROM cases
+    WHERE public_case_id = ?1 AND is_active = 1
+  `).bind(caseId).first();
+  const qualification = await economicApprovalQualification(env, caseId);
+  if (!active || String(active.status) !== 'PENDING_APPROVAL' || !qualification.allowed) {
+    await suppressInvalidPendingGate(env);
+    return json({
+      error: 'ECONOMIC_APPROVAL_BLOCKED',
+      dispatchExecuted: false,
+      caseId,
+      economicScore: Number(qualification.row?.economic_score || 0),
+      economicallyQualified: Number(qualification.row?.economically_qualified || 0) === 1,
+      scoringVersion: qualification.row?.scoring_version || null,
+      selectedAt: qualification.row?.selected_at || null
+    }, 409, corsHeaders(request, env));
+  }
+  return null;
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -233,12 +291,23 @@ export default {
       return healthWithRadar(request, env, ctx);
     }
 
+    if (request.method === 'GET' && url.pathname === '/v1/owner-state') {
+      await ensureProductionSchema(env);
+      await suppressInvalidPendingGate(env);
+      return baseWorker.fetch(request, env, ctx);
+    }
+
     if (request.method === 'POST' && url.pathname === '/v1/radar/run') {
       return handleOwnerRadarRun(request, env);
     }
 
     if (request.method === 'POST' && url.pathname === '/v1/private/case-detail') {
       return handlePrivateCaseRead(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/approval-intents') {
+      const blocked = await hardGateApprovalRequest(request, env);
+      if (blocked) return blocked;
     }
 
     return baseWorker.fetch(request, env, ctx);
