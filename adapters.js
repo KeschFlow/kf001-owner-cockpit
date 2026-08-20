@@ -11,12 +11,12 @@ const CASE_STATUSES = Object.freeze({
 const PUBLIC_FALLBACK = Object.freeze({
   caseId: 'PUB-001',
   caseValueScore: 'PRIVATE / NOT EXPOSED',
-  outreachReady: true,
-  impactClass: 'HOCH',
-  evidenceQuality: 'PRIVATE / NOT EXPOSED',
-  recommendation: 'APPROVE OUTREACH',
-  outreachMessage: 'Anonymisierte Erstkontakt-Nachricht ist vorbereitet. Empfänger, Falldetails, Beweise und Konditionen verbleiben ausschließlich im privaten System.',
-  status: CASE_STATUSES.PENDING_APPROVAL,
+  outreachReady: false,
+  impactClass: '—',
+  evidenceQuality: '—',
+  recommendation: 'NO QUALIFIED ECONOMIC WINNER',
+  outreachMessage: 'Kein wirtschaftlich qualifizierter Fall im Owner Gate.',
+  status: CASE_STATUSES.REJECTED,
   version: 1
 });
 
@@ -32,7 +32,7 @@ function endpoint(path) {
 function safeCacheRecord(record) {
   return {
     caseId: String(record.caseId || PUBLIC_FALLBACK.caseId),
-    status: Object.values(CASE_STATUSES).includes(record.status) ? record.status : CASE_STATUSES.PENDING_APPROVAL,
+    status: Object.values(CASE_STATUSES).includes(record.status) ? record.status : CASE_STATUSES.REJECTED,
     version: Number(record.version || 1),
     cachedAt: new Date().toISOString()
   };
@@ -64,18 +64,35 @@ class CaseStoreAdapter {
     }
   }
 
+  clearCache() {
+    try { localStorage.removeItem(CACHE_KEY); } catch {}
+  }
+
   async loadOwnerState() {
     const url = endpoint(config().ownerStatePath || '/v1/owner-state');
     if (url && this.centralBackendConnected) {
       try {
         const response = await fetch(url, {
           credentials: config().ownerStateCredentials || 'omit',
+          cache: 'no-store',
           headers: { Accept: 'application/json' }
         });
-        if (!response.ok) throw new Error(`Owner state HTTP ${response.status}`);
-        const state = await response.json();
-        this.writeCache(state);
-        return { ...PUBLIC_FALLBACK, ...state, stateSource: 'CENTRAL_BACKEND', isSourceOfTruth: true };
+        const payload = await response.json().catch(() => ({}));
+        if (response.status === 404 && payload.error === 'NO_ACTIVE_CASE') {
+          this.clearCache();
+          return {
+            ...PUBLIC_FALLBACK,
+            caseId: null,
+            status: null,
+            version: 0,
+            noActiveCase: true,
+            stateSource: 'CENTRAL_BACKEND',
+            isSourceOfTruth: true
+          };
+        }
+        if (!response.ok) throw new Error(payload.error || `Owner state HTTP ${response.status}`);
+        this.writeCache(payload);
+        return { ...PUBLIC_FALLBACK, ...payload, stateSource: 'CENTRAL_BACKEND', isSourceOfTruth: true };
       } catch (error) {
         const cached = this.readCache();
         return {
@@ -99,6 +116,7 @@ class CaseStoreAdapter {
 
   async submitDecision({ caseId, decision, version }) {
     if (!['APPROVE', 'REJECT'].includes(decision)) throw new Error('Ungültige Owner-Entscheidung');
+    if (!caseId) throw new Error('NO_ACTIVE_CASE');
 
     const localStatus = decision === 'APPROVE'
       ? CASE_STATUSES.APPROVED_PENDING_DISPATCH
@@ -186,7 +204,7 @@ class NotificationAdapter {
     const padding = '='.repeat((4 - value.length % 4) % 4);
     const base64 = (value + padding).replace(/-/g, '+').replace(/_/g, '/');
     const raw = atob(base64);
-    return Uint8Array.from([...raw].map((char) => char.charCodeAt(0)));
+    return Uint8Array.from([...new Uint8Array([...raw].map((char) => char.charCodeAt(0)))].map((byte) => byte));
   }
 }
 
