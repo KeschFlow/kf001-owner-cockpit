@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kf001-owner-cockpit-v9-real-radar';
+const CACHE_NAME = 'kf001-owner-cockpit-v10-terminal-gate-hardening';
 const APP_SHELL = [
   './',
   './index.html',
