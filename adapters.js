@@ -8,6 +8,12 @@ const CASE_STATUSES = Object.freeze({
   REJECTED: 'REJECTED'
 });
 
+const TERMINAL_CASE_STATUSES = new Set([
+  CASE_STATUSES.DISPATCHED,
+  CASE_STATUSES.RESPONSE_RECEIVED,
+  CASE_STATUSES.REJECTED
+]);
+
 const PUBLIC_FALLBACK = Object.freeze({
   caseId: 'PUB-001',
   caseValueScore: 'PRIVATE / NOT EXPOSED',
@@ -35,6 +41,18 @@ function safeCacheRecord(record) {
     status: Object.values(CASE_STATUSES).includes(record.status) ? record.status : CASE_STATUSES.REJECTED,
     version: Number(record.version || 1),
     cachedAt: new Date().toISOString()
+  };
+}
+
+function noActiveCaseState() {
+  return {
+    ...PUBLIC_FALLBACK,
+    caseId: null,
+    status: null,
+    version: 0,
+    noActiveCase: true,
+    stateSource: 'CENTRAL_BACKEND',
+    isSourceOfTruth: true
   };
 }
 
@@ -68,6 +86,15 @@ class CaseStoreAdapter {
     try { localStorage.removeItem(CACHE_KEY); } catch {}
   }
 
+  usableCache() {
+    const cached = this.readCache();
+    if (cached && TERMINAL_CASE_STATUSES.has(cached.status)) {
+      this.clearCache();
+      return null;
+    }
+    return cached;
+  }
+
   async loadOwnerState() {
     const url = endpoint(config().ownerStatePath || '/v1/owner-state');
     if (url && this.centralBackendConnected) {
@@ -80,21 +107,21 @@ class CaseStoreAdapter {
         const payload = await response.json().catch(() => ({}));
         if (response.status === 404 && payload.error === 'NO_ACTIVE_CASE') {
           this.clearCache();
-          return {
-            ...PUBLIC_FALLBACK,
-            caseId: null,
-            status: null,
-            version: 0,
-            noActiveCase: true,
-            stateSource: 'CENTRAL_BACKEND',
-            isSourceOfTruth: true
-          };
+          return noActiveCaseState();
         }
         if (!response.ok) throw new Error(payload.error || `Owner state HTTP ${response.status}`);
+
+        // Terminal cases are history. Even if a stale server row still says is_active=1,
+        // the client must never render DISPATCHED/REJECTED/RESPONSE_RECEIVED as Owner Gate 1.
+        if (TERMINAL_CASE_STATUSES.has(payload.status)) {
+          this.clearCache();
+          return noActiveCaseState();
+        }
+
         this.writeCache(payload);
         return { ...PUBLIC_FALLBACK, ...payload, stateSource: 'CENTRAL_BACKEND', isSourceOfTruth: true };
       } catch (error) {
-        const cached = this.readCache();
+        const cached = this.usableCache();
         return {
           ...PUBLIC_FALLBACK,
           ...(cached || {}),
@@ -105,7 +132,7 @@ class CaseStoreAdapter {
       }
     }
 
-    const cached = this.readCache();
+    const cached = this.usableCache();
     return {
       ...PUBLIC_FALLBACK,
       ...(cached || {}),
