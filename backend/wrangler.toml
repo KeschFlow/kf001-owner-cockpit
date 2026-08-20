@@ -5,6 +5,11 @@ workers_dev = true
 
 [vars]
 PUBLIC_APP_ORIGIN = "https://keschflow.github.io"
+REVENUE_AUTOPILOT_ENABLED = "true"
+AUTOPILOT_MIN_ECONOMIC_SCORE = "72"
+AUTOPILOT_MIN_VALUE_USD = "8000"
+AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY = "1"
+SUCCESS_FEE_EUR = "750"
 
 [secrets]
 required = [
