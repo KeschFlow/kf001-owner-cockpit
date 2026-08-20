@@ -54,11 +54,17 @@
 
     const live = health.realRadar === 'LIVE';
     const lastRun = health.radarLastRunAt ? new Date(health.radarLastRunAt).toLocaleString('de-DE') : 'noch kein Lauf';
+    const economicQualified = Boolean(health.economicWinnerQualified);
+    const economicScore = health.economicWinnerScore == null ? '—' : `${Number(health.economicWinnerScore)}/100`;
+    const economicValue = Number(health.economicWinnerApproxUsd || 0);
+    const economicValueLabel = economicValue > 0 ? `~$${Math.round(economicValue).toLocaleString('en-US')}` : '—';
+    const economicCase = health.economicWinnerCaseId || 'KEIN QUALIFIZIERTER WINNER';
+
     panel.innerHTML = `
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 class="font-extrabold text-white text-sm">REAL RADAR</h3>
-          <p class="text-[11px] text-slate-400">Automatischer Scout sucht reale öffentliche Plattform-/Billing-Fälle, bewertet sie und hält private Identitäts-/Quelldaten aus der öffentlichen Ansicht heraus.</p>
+          <p class="text-[11px] text-slate-400">Automatischer Scout sucht reale öffentliche Plattform-/Billing-Fälle. Nur ein wirtschaftlich qualifizierter Economic Winner darf ins Owner Gate.</p>
         </div>
         <span class="text-[10px] font-mono px-2 py-1 rounded bg-slate-950 border ${live ? 'border-emerald-500/40 text-emerald-300' : 'border-amber-500/40 text-amber-300'}">${live ? 'LIVE' : 'NOT LIVE'}</span>
       </div>
@@ -67,6 +73,19 @@
         <div class="bg-slate-950/80 p-3 rounded-xl border border-slate-700"><span class="block text-[9px] text-slate-400 font-mono">GEFUNDEN</span><span class="block text-xs font-bold text-white mt-1">${Number(health.radarLastDiscovered || 0)}</span></div>
         <div class="bg-slate-950/80 p-3 rounded-xl border border-slate-700"><span class="block text-[9px] text-slate-400 font-mono">QUALIFIZIERT</span><span class="block text-xs font-bold text-white mt-1">${Number(health.radarLastQualified || 0)}</span></div>
         <div class="bg-slate-950/80 p-3 rounded-xl border border-slate-700"><span class="block text-[9px] text-slate-400 font-mono">KONTAKTIERBAR</span><span class="block text-xs font-bold text-white mt-1">${Number(health.radarLastContactable || 0)}</span></div>
+      </div>
+      <div class="rounded-xl border ${economicQualified ? 'border-emerald-500/40' : 'border-amber-500/40'} bg-slate-950/80 p-3">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <span class="block text-[9px] text-slate-400 font-mono">ECONOMIC WINNER</span>
+            <span class="block text-xs font-bold ${economicQualified ? 'text-emerald-300' : 'text-amber-300'} mt-1">${esc(economicCase)}</span>
+          </div>
+          <div class="grid grid-cols-3 gap-4 text-right text-xs">
+            <div><span class="block text-[9px] text-slate-500">SCORE</span><strong class="text-white">${esc(economicScore)}</strong></div>
+            <div><span class="block text-[9px] text-slate-500">VALUE</span><strong class="text-white">${esc(economicValueLabel)}</strong></div>
+            <div><span class="block text-[9px] text-slate-500">GATE</span><strong class="${economicQualified ? 'text-emerald-300' : 'text-amber-300'}">${economicQualified ? 'APPROVE-FÄHIG' : 'GESPERRT'}</strong></div>
+          </div>
+        </div>
       </div>
       <div class="flex flex-wrap gap-2">
         <button id="runRealRadarBtn" class="px-3 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold">⚡ RADAR JETZT SCANNEN</button>
@@ -84,7 +103,7 @@
     const button = document.getElementById('runRealRadarBtn');
     if (!ownerAuth) return;
     button.disabled = true;
-    result.textContent = 'Radar läuft: öffentliche Quellen werden jetzt geprüft und autoritativ bewertet …';
+    result.textContent = 'Radar läuft: öffentliche Quellen werden jetzt geprüft und wirtschaftlich bewertet …';
     try {
       const auth = await ownerAuth.createAssertion('RADAR_SCAN', null);
       const response = await fetch(endpoint(config().radarRunPath || '/v1/radar/run'), {
@@ -95,7 +114,11 @@
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || `RADAR_${response.status}`);
-      result.textContent = `Radar abgeschlossen: ${body.discovered || 0} gefunden, ${body.qualified || 0} qualifiziert, ${body.contactable || 0} kontaktierbar${body.promotedCaseId ? `, ${body.promotedCaseId} ins Owner Gate übernommen` : ''}.`;
+      const economic = body.economicSelection || {};
+      const winnerText = body.promotedCaseId
+        ? ` Economic Winner ${body.promotedCaseId} wurde ins Owner Gate übernommen.`
+        : ' Kein wirtschaftlich qualifizierter Fall wurde ins Owner Gate übernommen.';
+      result.textContent = `Radar abgeschlossen: ${body.discovered || 0} gefunden, ${body.qualified || 0} qualifiziert, ${body.contactable || 0} kontaktierbar.${winnerText}${economic.reason ? ` Grund: ${economic.reason}.` : ''}`;
       setTimeout(() => location.reload(), 1200);
     } catch (error) {
       result.textContent = `Radar fehlgeschlagen: ${error.message}`;
@@ -121,6 +144,7 @@
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || `PRIVATE_CASE_${response.status}`);
+      const economic = body.economic || null;
       box.className = 'p-3 bg-slate-950/90 rounded-xl border border-cyan-500/30 text-xs space-y-2';
       box.innerHTML = `
         <div class="flex justify-between gap-2"><strong class="text-cyan-300">PRIVATE OWNER DETAIL</strong><span class="font-mono text-slate-400">${esc(body.caseId)}</span></div>
@@ -131,6 +155,12 @@
           <div><span class="text-slate-500">Kontakt</span><div class="text-white font-bold break-all">${esc(body.contactEmail || 'nicht gefunden')}</div></div>
           <div><span class="text-slate-500">Impact Score</span><div class="text-white font-bold">${esc(body.impactScore)}/100</div></div>
           <div><span class="text-slate-500">Evidence Score</span><div class="text-white font-bold">${esc(body.evidenceScore)}/100</div></div>
+          <div><span class="text-slate-500">Economic Score</span><div class="font-bold ${economic?.economicallyQualified ? 'text-emerald-300' : 'text-amber-300'}">${economic ? `${esc(economic.economicScore)}/100` : 'nicht bewertet'}</div></div>
+          <div><span class="text-slate-500">Approx. Recoverable Value</span><div class="text-white font-bold">${economic ? `~$${Math.round(Number(economic.amountApproxUsd || 0)).toLocaleString('en-US')}` : '—'}</div></div>
+          <div><span class="text-slate-500">Solvability</span><div class="text-white font-bold">${economic ? `${esc(economic.solvability)}/100` : '—'}</div></div>
+          <div><span class="text-slate-500">Payer Probability</span><div class="text-white font-bold">${economic ? `${esc(economic.payerProbability)}/100` : '—'}</div></div>
+          <div><span class="text-slate-500">Proprietary Data Value</span><div class="text-white font-bold">${economic ? `${esc(economic.proprietaryDataValue)}/100` : '—'}</div></div>
+          <div><span class="text-slate-500">Reference Value</span><div class="text-white font-bold">${economic ? `${esc(economic.referenceValue)}/100` : '—'}</div></div>
         </div>
         <div><span class="text-slate-500">Originaltitel</span><div class="text-white font-bold">${esc(body.sourceTitle)}</div></div>
         <div><span class="text-slate-500">Öffentliche Quelle</span><div><a class="text-cyan-300 underline break-all" target="_blank" rel="noopener noreferrer" href="${esc(body.sourceUrl)}">${esc(body.sourceUrl)}</a></div></div>
