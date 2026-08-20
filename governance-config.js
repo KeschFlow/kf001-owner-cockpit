@@ -19,8 +19,10 @@ globalThis.KF001_CONFIG = Object.freeze({
 });
 
 (() => {
-  const script = document.createElement('script');
-  script.src = './radar-ui.js';
-  script.async = false;
-  document.head.appendChild(script);
+  for (const src of ['./radar-ui.js', './truth-ui-fix.js']) {
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = false;
+    document.head.appendChild(script);
+  }
 })();
