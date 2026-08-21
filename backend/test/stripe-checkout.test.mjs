@@ -286,6 +286,8 @@ test('public status contains only safe pricing and stage fields', async () => {
     feeMinEur: 750,
     feeMaxEur: 5000,
     stripeCheckoutReady: true,
+    caseCheckEnabled: false,
+    caseCheckPriceEur: 49,
     paymentStatus: 'REQUESTED'
   });
 });
