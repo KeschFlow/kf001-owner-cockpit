@@ -187,4 +187,55 @@ export async function createSuccessFeeCheckoutSession(env, payload, storedPricin
   });
 }
 
+export async function createCaseCheckCheckoutSession(env, payload) {
+  if (!env?.STRIPE_SECRET_KEY) throw new Error('STRIPE_SECRET_KEY_NOT_CONFIGURED');
+  const caseId = validCaseId(payload?.publicCaseId);
+  const customerEmail = validCustomerEmail(payload?.customerEmail);
+  const amountCents = Math.round(envNumber(env, 'CASE_CHECK_PRICE_EUR', 49) * 100);
+  const successUrl = configuredUrl(env.STRIPE_SUCCESS_URL, 'STRIPE_SUCCESS_URL_NOT_CONFIGURED');
+  const cancelUrl = configuredUrl(env.STRIPE_CANCEL_URL, 'STRIPE_CANCEL_URL_NOT_CONFIGURED');
+  const idempotencyKey = `kf001-case-check-${caseId}-v1`;
+  const expiresAt = Math.floor(Date.now() / 1000) + CHECKOUT_TTL_SECONDS;
+  const body = new URLSearchParams({
+    mode: 'payment',
+    success_url: successUrl,
+    cancel_url: cancelUrl,
+    client_reference_id: caseId,
+    customer_email: customerEmail,
+    expires_at: String(expiresAt),
+    'line_items[0][price_data][currency]': 'eur',
+    'line_items[0][price_data][unit_amount]': String(amountCents),
+    'line_items[0][price_data][product_data][name]': 'KESCHFLOW Platform/Billing Case Check',
+    'line_items[0][price_data][product_data][description]': `${caseId}: Fallanalyse, Beweislücken, Eskalationsweg und versandfertiges Schreiben`,
+    'line_items[0][quantity]': '1',
+    'metadata[case_id]': caseId,
+    'metadata[public_case_id]': caseId,
+    'metadata[product_type]': 'CASE_CHECK_49',
+    'metadata[expected_amount_cents]': String(amountCents),
+    'metadata[pricing_version]': 'CASE_CHECK_V1'
+  });
+  const response = await fetch(STRIPE_CHECKOUT_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Idempotency-Key': idempotencyKey
+    },
+    body
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.id || !result.url) throw new Error(`STRIPE_CHECKOUT_CREATE_${response.status}`);
+  if (Number(result.amount_total) !== amountCents || String(result.currency || '').toLowerCase() !== 'eur') {
+    throw new Error('STRIPE_CHECKOUT_RESPONSE_MISMATCH');
+  }
+  const checkoutUrl = new URL(String(result.url));
+  if (checkoutUrl.protocol !== 'https:' || checkoutUrl.hostname !== 'checkout.stripe.com') {
+    throw new Error('STRIPE_CHECKOUT_URL_INVALID');
+  }
+  return Object.freeze({
+    id: String(result.id), url: checkoutUrl.toString(), amountCents, idempotencyKey,
+    expiresAt: result.expires_at ? new Date(Number(result.expires_at) * 1000).toISOString() : new Date(expiresAt * 1000).toISOString()
+  });
+}
+
 export const SUCCESS_FEE_PRICING_VERSION = PRICING_VERSION;
