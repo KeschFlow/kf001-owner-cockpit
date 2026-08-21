@@ -1,8 +1,14 @@
 import { getGmailThread, gmailConfigured, sendGmail, sendGmailReply } from './gmail.js';
+import {
+  calculateSuccessFee,
+  createSuccessFeeCheckoutSession,
+  stripeIdempotencyKey,
+  stripeCheckoutConfigured,
+  successFeeConfig
+} from './stripe.js';
 
 const DEFAULT_MIN_SCORE = 72;
 const DEFAULT_MIN_VALUE_USD = 8000;
-const DEFAULT_SUCCESS_FEE_EUR = 750;
 const LOCK_SECONDS = 180;
 
 const OPEN_STAGES = new Set([
@@ -15,6 +21,8 @@ const OPEN_STAGES = new Set([
   'REPLY_MONITOR_BLOCKED',
   'SEND_UNKNOWN',
   'SUCCESS_CONFIRMATION_PENDING',
+  'SUCCESS_CONFIRMED_PAYMENT_SETUP_REQUIRED',
+  'PAYMENT_MESSAGE_SEND_UNKNOWN',
   'PAYMENT_PENDING'
 ]);
 
@@ -133,8 +141,8 @@ function classifyReply(text, attachments, stage) {
     return 'NEGATIVE';
   }
   if (stage === 'ENGAGED' || stage === 'EVIDENCE_RECEIVED' || stage === 'SUCCESS_CONFIRMATION_PENDING') {
-    if (/(refund(?:ed)?|credit(?:ed)?|waiv(?:ed|er)|money back|recovered|reimbursement)/.test(source)
-      && /(received|approved|completed|landed|paid back|back in|resolved|successful)/.test(source)) {
+    if (/(refund(?:ed)?|credit(?:ed)?|waiv(?:ed|er)|money back|recovered|reimbursement|cancel(?:led|ed)|voided)/.test(source)
+      && /(received|approved|completed|landed|paid back|back in|resolved|successful|cancel(?:led|ed)|voided)/.test(source)) {
       return 'SUCCESS';
     }
   }
@@ -151,7 +159,7 @@ function classifyReply(text, attachments, stage) {
 }
 
 function initialMessage(row, env) {
-  const fee = numericEnv(env, 'SUCCESS_FEE_EUR', DEFAULT_SUCCESS_FEE_EUR);
+  const pricing = successFeeConfig(env);
   const name = clean(row.recipient_name, 120);
   const greeting = name ? `Hello ${name},` : 'Hello,';
   const amount = Number(row.amount_approx_usd || 0);
@@ -166,7 +174,7 @@ function initialMessage(row, env) {
     '',
     'I run KeschFlow, a structured case-reconstruction workflow for stalled platform and billing disputes. I can first reconstruct the public timeline, identify the strongest evidence gaps and build the escalation path. I do not need your password, API keys or account access.',
     '',
-    `Commercial model: no upfront fee. If you engage me and the work results in at least USD 8,000 equivalent being recovered, credited or cancelled, the fixed success fee is EUR ${fee}. Otherwise the fee is EUR 0.`,
+    `Commercial model: no upfront fee. The success fee is ${pricing.feePercent}% of the documented amount recovered, credited or cancelled, with a minimum of EUR ${pricing.feeMinEur.toFixed(2)} and a maximum of EUR ${pricing.feeMaxEur.toFixed(2)}. No fee is due without a documented successful outcome of at least USD ${pricing.minRecoveredUsd.toLocaleString('en-US')} equivalent.`,
     '',
     'If this is still unresolved and you want me to proceed, reply YES. I will then send the short engagement confirmation and evidence checklist.',
     '',
@@ -177,11 +185,11 @@ function initialMessage(row, env) {
 }
 
 function termsMessage(env) {
-  const fee = numericEnv(env, 'SUCCESS_FEE_EUR', DEFAULT_SUCCESS_FEE_EUR);
+  const pricing = successFeeConfig(env);
   return [
     'Thanks for replying.',
     '',
-    `Engagement terms: no upfront fee. A fixed EUR ${fee} success fee is due only if, after the engagement begins, the documented recovered, credited or cancelled amount reaches at least USD 8,000 equivalent. If that threshold is not reached, the fee is EUR 0.`,
+    `Engagement terms: no upfront fee. The success fee is ${pricing.feePercent}% of the documented amount recovered, credited or cancelled, with a minimum of EUR ${pricing.feeMinEur.toFixed(2)} and a maximum of EUR ${pricing.feeMaxEur.toFixed(2)}. No success fee is due unless the documented successful outcome reaches at least USD ${pricing.minRecoveredUsd.toLocaleString('en-US')} equivalent.`,
     '',
     'The service is evidence reconstruction and escalation support, not legal representation, and no outcome is guaranteed. You remain in control of any account action, settlement or legal decision.',
     '',
@@ -210,27 +218,236 @@ function evidenceChecklistMessage() {
 }
 
 function successAmountQuestion(env) {
-  const fee = numericEnv(env, 'SUCCESS_FEE_EUR', DEFAULT_SUCCESS_FEE_EUR);
+  const pricing = successFeeConfig(env);
   return [
     'That sounds like a successful outcome. Before I close the case, please confirm the total amount that was actually recovered, credited or cancelled.',
     '',
-    `Under the accepted terms, the EUR ${fee} success fee is due only if that documented amount is at least USD 8,000 equivalent.`
+    `Under the accepted terms, the success fee is ${pricing.feePercent}% of the documented successful amount, minimum EUR ${pricing.feeMinEur.toFixed(2)} and maximum EUR ${pricing.feeMaxEur.toFixed(2)}, and is due only when the documented amount reaches at least USD ${pricing.minRecoveredUsd.toLocaleString('en-US')} equivalent.`
   ].join('\n');
 }
 
-function paymentMessage(env, recoveredUsd) {
-  const fee = numericEnv(env, 'SUCCESS_FEE_EUR', DEFAULT_SUCCESS_FEE_EUR);
-  const link = clean(env.PAYMENT_LINK, 1000);
+function paymentMessage(recoveredUsd, pricing, checkoutUrl) {
+  const limitLine = pricing.minimumApplied
+    ? `The minimum fee of EUR ${pricing.feeMinEur.toFixed(2)} applies.`
+    : pricing.maximumApplied
+      ? `The maximum fee of EUR ${pricing.feeMaxEur.toFixed(2)} applies.`
+      : 'Neither the minimum nor maximum fee limit applies.';
   return [
     'Great result — thank you for confirming the outcome.',
     '',
-    `Confirmed recovered/credited/cancelled value: approximately USD ${Math.round(recoveredUsd).toLocaleString('en-US')}.`,
-    `Under the accepted engagement terms, the fixed success fee is EUR ${fee}.`,
+    `Confirmed recovered/credited/cancelled value: USD ${recoveredUsd.toFixed(2)}.`,
+    `Conversion used: USD→EUR ${pricing.eurUsdRate.toFixed(4)}; converted value: EUR ${pricing.recoveredEur.toFixed(2)}.`,
+    `${pricing.feePercent}% calculation before limits: EUR ${pricing.uncappedFeeAmountEur.toFixed(2)}. ${limitLine}`,
+    `Final success fee: EUR ${pricing.feeAmountEur.toFixed(2)}.`,
     '',
-    `Payment: ${link}`,
+    `Individual Stripe Checkout: ${checkoutUrl}`,
     '',
     'Once payment is received, the case is closed and the outcome remains recorded in the KeschFlow case history.'
   ].join('\n');
+}
+
+async function persistPaymentSetupFailure(env, record, recovered, pricing, successEventKey, errorCode, at) {
+  return env.CASE_DB.prepare(`
+    UPDATE revenue_autopilot
+       SET stage = 'SUCCESS_CONFIRMED_PAYMENT_SETUP_REQUIRED', success_confirmed_at = COALESCE(success_confirmed_at, ?2),
+           recovered_approx_usd = ?3, success_fee_percent = ?4, success_fee_min_eur = ?5,
+           success_fee_max_eur = ?6, success_min_recovered_usd = ?7,
+           usd_to_eur_rate = ?8, success_fee_eur_usd_rate = ?8,
+           calculated_fee_eur = ?9, calculated_fee_minor = ?10, success_fee_amount_cents = ?10,
+           success_fee_currency = 'EUR', pricing_version = ?11, success_event_key = ?12,
+           error_code = ?13, updated_at = ?2
+     WHERE public_case_id = ?1 AND stripe_checkout_session_id IS NULL
+       AND (success_event_key IS NULL OR success_event_key = ?12)
+       AND stage <> 'PAID'
+  `).bind(
+    record.public_case_id, at, recovered, pricing.feePercent, pricing.feeMinEur,
+    pricing.feeMaxEur, pricing.minRecoveredUsd, pricing.eurUsdRate, pricing.feeAmountEur,
+    pricing.feeAmountCents, pricing.pricingVersion, successEventKey, errorCode
+  ).run();
+}
+
+function pricingFromStoredRecord(stored) {
+  const recoveredUsd = Number(stored?.recovered_approx_usd);
+  const config = {
+    feePercent: Number(stored?.success_fee_percent),
+    feeMinEur: Number(stored?.success_fee_min_eur),
+    feeMaxEur: Number(stored?.success_fee_max_eur),
+    minRecoveredUsd: Number(stored?.success_min_recovered_usd || 8000),
+    usdToEurRate: Number(stored?.usd_to_eur_rate ?? stored?.success_fee_eur_usd_rate)
+  };
+  return { recoveredUsd, config, pricing: calculateSuccessFee(recoveredUsd, config.usdToEurRate, config) };
+}
+
+async function ensureDynamicCheckout(env, record, recovered, at = nowIso()) {
+  let stored = await env.CASE_DB.prepare(`
+    SELECT recovered_approx_usd, success_fee_percent, success_fee_min_eur,
+           success_fee_max_eur, success_min_recovered_usd, usd_to_eur_rate, success_fee_eur_usd_rate,
+           calculated_fee_minor, success_fee_amount_cents, success_fee_currency,
+           pricing_version, success_event_key, stripe_checkout_session_id,
+           stripe_checkout_url, checkout_creation_attempted_at, checkout_expires_at
+      FROM revenue_autopilot WHERE public_case_id = ?1
+  `).bind(record.public_case_id).first();
+
+  let config;
+  let pricing;
+  let lockedRecovered = Number(recovered);
+  let successEventKey;
+  if (stored?.success_event_key) {
+    const snapshot = pricingFromStoredRecord(stored);
+    lockedRecovered = snapshot.recoveredUsd;
+    config = snapshot.config;
+    pricing = snapshot.pricing;
+    successEventKey = String(stored.success_event_key);
+    if (Number(recovered).toFixed(2) !== lockedRecovered.toFixed(2)) {
+      return { ok: false, error: 'SUCCESS_FEE_ALREADY_LOCKED', pricing };
+    }
+  } else {
+    config = successFeeConfig(env);
+    pricing = calculateSuccessFee(lockedRecovered, config.usdToEurRate, config);
+    successEventKey = stripeIdempotencyKey(record.public_case_id, lockedRecovered);
+    const claim = await persistPaymentSetupFailure(
+      env, record, lockedRecovered, pricing, successEventKey, 'STRIPE_CHECKOUT_PENDING', at
+    );
+    if (Number(claim.meta?.changes || 0) !== 1) {
+      return { ok: false, error: 'SUCCESS_FEE_STATE_CONFLICT', pricing };
+    }
+    stored = { ...stored, success_event_key: successEventKey };
+  }
+
+  let checkout = stored?.stripe_checkout_session_id && stored?.stripe_checkout_url ? {
+    id: stored.stripe_checkout_session_id,
+    url: stored.stripe_checkout_url,
+    expiresAt: stored.checkout_expires_at,
+    pricing
+  } : null;
+
+  if (checkout) return { ok: true, checkout, pricing };
+
+  if (!stripeCheckoutConfigured(env)) {
+    const errorCode = !env.STRIPE_SECRET_KEY ? 'STRIPE_SECRET_KEY_NOT_CONFIGURED' : 'STRIPE_CHECKOUT_URLS_NOT_CONFIGURED';
+    await env.CASE_DB.prepare(`
+      UPDATE revenue_autopilot
+         SET stage = 'SUCCESS_CONFIRMED_PAYMENT_SETUP_REQUIRED', error_code = ?2, updated_at = ?3
+       WHERE public_case_id = ?1 AND success_event_key = ?4 AND stripe_checkout_session_id IS NULL
+    `).bind(record.public_case_id, errorCode, at, successEventKey).run();
+    return { ok: false, error: errorCode, pricing };
+  }
+
+  if (stored?.checkout_creation_attempted_at) {
+    return { ok: false, error: 'STRIPE_CHECKOUT_RECONCILIATION_REQUIRED', pricing };
+  }
+
+  const attemptAt = nowIso();
+  const attempt = await env.CASE_DB.prepare(`
+    UPDATE revenue_autopilot
+       SET checkout_creation_attempted_at = ?2, updated_at = ?2
+     WHERE public_case_id = ?1 AND success_event_key = ?3
+       AND stripe_checkout_session_id IS NULL AND checkout_creation_attempted_at IS NULL
+  `).bind(record.public_case_id, attemptAt, successEventKey).run();
+  if (Number(attempt.meta?.changes || 0) !== 1) {
+    return { ok: false, error: 'STRIPE_CHECKOUT_RECONCILIATION_REQUIRED', pricing };
+  }
+
+  try {
+    checkout = await createSuccessFeeCheckoutSession(env, {
+      publicCaseId: record.public_case_id,
+      recoveredAmountUsd: lockedRecovered,
+      customerEmail: record.recipient_email
+    }, config);
+      const checkoutAt = nowIso();
+      const saved = await env.CASE_DB.prepare(`
+        UPDATE revenue_autopilot
+           SET stripe_checkout_session_id = ?2, stripe_checkout_url = ?3,
+               checkout_created_at = ?4, stripe_checkout_created_at = ?4,
+               checkout_expires_at = ?5,
+               error_code = NULL, updated_at = ?4
+         WHERE public_case_id = ?1 AND stripe_checkout_session_id IS NULL AND success_event_key = ?6
+      `).bind(
+        record.public_case_id, checkout.id, checkout.url, checkoutAt,
+        checkout.expiresAt, successEventKey
+      ).run();
+      if (Number(saved.meta?.changes || 0) !== 1) {
+        const winner = await env.CASE_DB.prepare(`
+          SELECT stripe_checkout_session_id, stripe_checkout_url, checkout_expires_at
+            FROM revenue_autopilot WHERE public_case_id = ?1
+        `).bind(record.public_case_id).first();
+        if (!winner?.stripe_checkout_session_id || !winner?.stripe_checkout_url) {
+          throw new Error('STRIPE_CHECKOUT_STATE_CONFLICT');
+        }
+        checkout = {
+          ...checkout,
+          id: winner.stripe_checkout_session_id,
+          url: winner.stripe_checkout_url,
+          expiresAt: winner.checkout_expires_at
+        };
+      }
+  } catch (error) {
+    const errorCode = clean(error.message || 'STRIPE_CHECKOUT_CREATE_FAILED', 120);
+    if (/^STRIPE_CHECKOUT_CREATE_4\d\d$/.test(errorCode)) {
+      await env.CASE_DB.prepare(`
+        UPDATE revenue_autopilot SET checkout_creation_attempted_at = NULL, updated_at = ?2
+         WHERE public_case_id = ?1 AND success_event_key = ?3 AND stripe_checkout_session_id IS NULL
+      `).bind(record.public_case_id, nowIso(), successEventKey).run();
+    }
+    await env.CASE_DB.prepare(`
+      UPDATE revenue_autopilot
+         SET stage = 'SUCCESS_CONFIRMED_PAYMENT_SETUP_REQUIRED', error_code = ?2, updated_at = ?3
+       WHERE public_case_id = ?1 AND success_event_key = ?4 AND stripe_checkout_session_id IS NULL
+    `).bind(record.public_case_id, errorCode, nowIso(), successEventKey).run();
+    return { ok: false, error: errorCode, pricing };
+  }
+
+  return { ok: true, checkout, pricing };
+}
+
+async function requestDynamicPayment(env, record, message, recovered, at = nowIso()) {
+  const prepared = await ensureDynamicCheckout(env, record, recovered, at);
+  if (!prepared.ok) {
+    return {
+      ok: prepared.error === 'STRIPE_SECRET_KEY_NOT_CONFIGURED' || prepared.error === 'STRIPE_CHECKOUT_URLS_NOT_CONFIGURED',
+      action: 'SUCCESS_CONFIRMED_PAYMENT_SETUP_REQUIRED',
+      caseId: record.public_case_id,
+      recoveredApproxUsd: recovered,
+      error: prepared.error
+    };
+  }
+  const { checkout, pricing } = prepared;
+
+  let sent;
+  try {
+    sent = await sendThreadReply(env, record, message, paymentMessage(recovered, pricing, checkout.url));
+  } catch (error) {
+    await env.CASE_DB.prepare(`
+      UPDATE revenue_autopilot
+         SET stage = 'PAYMENT_MESSAGE_SEND_UNKNOWN', error_code = ?2, updated_at = ?3
+       WHERE public_case_id = ?1
+    `).bind(record.public_case_id, clean(error.message || 'GMAIL_SEND_FAILED', 120), nowIso()).run();
+    return { ok: false, action: 'PAYMENT_MESSAGE_SEND_UNKNOWN', caseId: record.public_case_id };
+  }
+
+  const requestedAt = nowIso();
+  const paymentState = await env.CASE_DB.prepare(`
+    UPDATE revenue_autopilot
+       SET stage = 'PAYMENT_PENDING', payment_requested_at = ?2,
+           payment_status = 'REQUESTED', error_code = NULL, updated_at = ?2
+     WHERE public_case_id = ?1 AND stripe_checkout_session_id = ?3
+  `).bind(record.public_case_id, requestedAt, checkout.id).run();
+  if (Number(paymentState.meta?.changes || 0) !== 1) {
+    await env.CASE_DB.prepare(`
+      UPDATE revenue_autopilot
+         SET stage = 'PAYMENT_MESSAGE_SEND_UNKNOWN', error_code = 'PAYMENT_STATE_CONFLICT', updated_at = ?2
+       WHERE public_case_id = ?1
+    `).bind(record.public_case_id, nowIso()).run();
+    return { ok: false, action: 'PAYMENT_MESSAGE_SEND_UNKNOWN', caseId: record.public_case_id };
+  }
+  return {
+    ok: true,
+    action: 'PAYMENT_REQUESTED',
+    caseId: record.public_case_id,
+    recoveredApproxUsd: recovered,
+    feeAmountCents: pricing.feeAmountCents,
+    messageId: sent.id
+  };
 }
 
 export async function ensureRevenueAutopilotSchema(env) {
@@ -503,7 +720,7 @@ async function handleInbound(env, record, message) {
   if ((record.stage === 'ENGAGED' || record.stage === 'EVIDENCE_RECEIVED' || record.stage === 'SUCCESS_CONFIRMATION_PENDING')
     && classification === 'SUCCESS') {
     const recovered = extractApproxUsd(message.text);
-    const minValue = numericEnv(env, 'AUTOPILOT_MIN_VALUE_USD', DEFAULT_MIN_VALUE_USD);
+    const minValue = successFeeConfig(env).minRecoveredUsd;
     if (recovered < minValue) {
       const sent = await sendThreadReply(env, record, message, successAmountQuestion(env));
       await env.CASE_DB.prepare(`
@@ -514,26 +731,7 @@ async function handleInbound(env, record, message) {
       `).bind(record.public_case_id, at, recovered).run();
       return { ok: true, action: 'SUCCESS_AMOUNT_CONFIRMATION_REQUESTED', caseId: record.public_case_id, messageId: sent.id };
     }
-
-    const paymentLink = clean(env.PAYMENT_LINK, 1000);
-    if (!paymentLink) {
-      await env.CASE_DB.prepare(`
-        UPDATE revenue_autopilot
-           SET stage = 'SUCCESS_CONFIRMATION_PENDING', success_confirmed_at = ?2,
-               recovered_approx_usd = ?3, error_code = 'PAYMENT_LINK_NOT_CONFIGURED', updated_at = ?2
-         WHERE public_case_id = ?1
-      `).bind(record.public_case_id, at, recovered).run();
-      return { ok: true, action: 'SUCCESS_CONFIRMED_PAYMENT_SETUP_REQUIRED', caseId: record.public_case_id, recoveredApproxUsd: recovered };
-    }
-
-    const sent = await sendThreadReply(env, record, message, paymentMessage(env, recovered));
-    await env.CASE_DB.prepare(`
-      UPDATE revenue_autopilot
-         SET stage = 'PAYMENT_PENDING', success_confirmed_at = ?2, recovered_approx_usd = ?3,
-             payment_requested_at = ?2, payment_status = 'REQUESTED', error_code = NULL, updated_at = ?2
-       WHERE public_case_id = ?1
-    `).bind(record.public_case_id, at, recovered).run();
-    return { ok: true, action: 'PAYMENT_REQUESTED', caseId: record.public_case_id, recoveredApproxUsd: recovered, messageId: sent.id };
+    return requestDynamicPayment(env, record, message, recovered, at);
   }
 
   if (classification === 'AMBIGUOUS') {
@@ -561,6 +759,13 @@ async function monitorOpenCase(env, record) {
   }
 
   const messages = inboundMessages(thread, record.recipient_email, record.initial_sent_at);
+  if (record.stage === 'SUCCESS_CONFIRMED_PAYMENT_SETUP_REQUIRED') {
+    const successMessage = messages.find((message) => message.id === record.last_inbound_message_id);
+    if (!successMessage || Number(record.recovered_approx_usd || 0) < successFeeConfig(env).minRecoveredUsd) {
+      return { ok: false, reason: 'CONFIRMED_SUCCESS_MESSAGE_NOT_AVAILABLE', caseId: record.public_case_id };
+    }
+    return requestDynamicPayment(env, record, successMessage, Number(record.recovered_approx_usd));
+  }
   const next = messages.find((message) => message.id && message.id !== record.last_inbound_message_id
     && message.internalDate > (Date.parse(record.last_inbound_at || '') || 0));
   if (next) return handleInbound(env, record, next);
@@ -584,18 +789,26 @@ export async function revenueAutopilotStatus(env) {
   const latest = current || await env.CASE_DB.prepare(`
     SELECT * FROM revenue_autopilot ORDER BY updated_at DESC LIMIT 1
   `).first();
+  const pricing = successFeeConfig(env);
   return latest ? {
     enabled: enabled(env),
-    caseId: latest.public_case_id,
     stage: latest.stage,
-    economicScore: Number(latest.economic_score || 0),
-    amountApproxUsd: Number(latest.amount_approx_usd || 0),
-    initialSentAt: latest.initial_sent_at || null,
-    lastInboundAt: latest.last_inbound_at || null,
-    lastReplyClass: latest.last_reply_class || null,
-    paymentStatus: latest.payment_status || null,
-    error: latest.error_code || null
-  } : { enabled: enabled(env), stage: 'IDLE' };
+    pricingModel: 'DYNAMIC_SUCCESS_FEE',
+    feePercent: pricing.feePercent,
+    feeMinEur: pricing.feeMinEur,
+    feeMaxEur: pricing.feeMaxEur,
+    stripeCheckoutReady: stripeCheckoutConfigured(env),
+    paymentStatus: latest.payment_status || null
+  } : {
+    enabled: enabled(env),
+    stage: 'IDLE',
+    pricingModel: 'DYNAMIC_SUCCESS_FEE',
+    feePercent: pricing.feePercent,
+    feeMinEur: pricing.feeMinEur,
+    feeMaxEur: pricing.feeMaxEur,
+    stripeCheckoutReady: stripeCheckoutConfigured(env),
+    paymentStatus: null
+  };
 }
 
 export async function runRevenueAutopilot(env) {
@@ -620,5 +833,8 @@ export const REVENUE_AUTOPILOT_INTERNALS = Object.freeze({
   OPEN_STAGES,
   CLOSED_STAGES,
   classifyReply,
-  extractApproxUsd
+  ensureDynamicCheckout,
+  extractApproxUsd,
+  paymentMessage,
+  requestDynamicPayment
 });

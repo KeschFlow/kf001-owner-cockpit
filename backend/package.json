@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check src/worker.js && node --check src/worker-v2.js && node --check src/worker-v3.js && node --check src/radar.js && node --check src/economic-selector.js && node --check src/contact-enrichment.js && node --check src/revenue-autopilot.js && node --check src/gmail.js && node --check src/webauthn.js",
+    "check": "node --check src/worker.js && node --check src/worker-v2.js && node --check src/worker-v3.js && node --check src/radar.js && node --check src/economic-selector.js && node --check src/contact-enrichment.js && node --check src/revenue-autopilot.js && node --check src/stripe.js && node --check src/gmail.js && node --check src/webauthn.js",
     "test": "node --test test/*.test.mjs",
     "deploy": "npm run check && npm test && npx wrangler deploy",
     "migrate:local": "npx wrangler d1 migrations apply kf001-owner-state --local",

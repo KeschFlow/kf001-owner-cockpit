@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { REVENUE_AUTOPILOT_INTERNALS } from '../src/revenue-autopilot.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const autopilot = fs.readFileSync(path.join(here, '..', 'src', 'revenue-autopilot.js'), 'utf8');
@@ -40,11 +41,24 @@ test('positive reply moves to explicit engagement terms before evidence intake',
   assert.match(autopilot, /evidenceChecklistMessage/);
 });
 
-test('success fee is requested only after success amount meets the threshold and a payment link exists', () => {
+test('cancelled or voided documented value is recognized as a successful outcome', () => {
+  assert.equal(
+    REVENUE_AUTOPILOT_INTERNALS.classifyReply('USD 10,000 was cancelled and resolved.', [], 'ENGAGED'),
+    'SUCCESS'
+  );
+  assert.equal(
+    REVENUE_AUTOPILOT_INTERNALS.classifyReply('The USD 10,000 charge was voided.', [], 'EVIDENCE_RECEIVED'),
+    'SUCCESS'
+  );
+});
+
+test('success fee is calculated server-side and only requested through an individual Stripe Checkout', () => {
   assert.match(autopilot, /recovered < minValue/);
-  assert.match(autopilot, /PAYMENT_LINK_NOT_CONFIGURED/);
+  assert.match(autopilot, /createSuccessFeeCheckoutSession/);
+  assert.match(autopilot, /stripe_checkout_session_id/);
   assert.match(autopilot, /stage = 'PAYMENT_PENDING'/);
-  assert.match(autopilot, /SUCCESS_FEE_EUR/);
+  assert.doesNotMatch(autopilot, /env\.PAYMENT_LINK/);
+  assert.doesNotMatch(autopilot, /fixed success fee/i);
 });
 
 test('worker v3 runs the revenue autopilot only inside the isolated sidecar', () => {
@@ -58,8 +72,24 @@ test('gmail module supports thread reads and replies for reply monitoring', () =
   assert.match(gmail, /sendGmailReply/);
 });
 
-test('production config enables one-case revenue autopilot with EUR 750 success fee', () => {
+test('production config enables the capped dynamic success-fee model', () => {
   assert.match(wrangler, /REVENUE_AUTOPILOT_ENABLED = "true"/);
   assert.match(wrangler, /AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY = "1"/);
-  assert.match(wrangler, /SUCCESS_FEE_EUR = "750"/);
+  assert.match(wrangler, /SUCCESS_FEE_PERCENT = "10"/);
+  assert.match(wrangler, /SUCCESS_FEE_MIN_EUR = "750"/);
+  assert.match(wrangler, /SUCCESS_FEE_MAX_EUR = "5000"/);
+  assert.match(wrangler, /SUCCESS_MIN_RECOVERED_USD = "8000"/);
+  assert.match(wrangler, /SUCCESS_FEE_EUR_USD_RATE = "0.90"/);
+  assert.match(wrangler, /USD_TO_EUR_RATE = "0.90"/);
+  assert.doesNotMatch(wrangler, /SUCCESS_FEE_EUR =/);
+  assert.doesNotMatch(wrangler, /PAYMENT_LINK/);
+});
+
+test('public autopilot status exposes no checkout URL, Stripe ID, or customer email', () => {
+  assert.match(autopilot, /pricingModel: 'DYNAMIC_SUCCESS_FEE'/);
+  assert.match(autopilot, /stripeCheckoutReady/);
+  const statusBody = autopilot.slice(autopilot.indexOf('export async function revenueAutopilotStatus'), autopilot.indexOf('export async function runRevenueAutopilot'));
+  assert.doesNotMatch(statusBody, /recipient_email/);
+  assert.doesNotMatch(statusBody, /stripe_checkout_url/);
+  assert.doesNotMatch(statusBody, /stripe_checkout_session_id/);
 });
