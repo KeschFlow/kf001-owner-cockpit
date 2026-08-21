@@ -35,6 +35,16 @@ function endpoint(path) {
   return base ? `${base}${path}` : '';
 }
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error('BACKEND_TIMEOUT')), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function safeCacheRecord(record) {
   return {
     caseId: String(record.caseId || PUBLIC_FALLBACK.caseId),
@@ -99,7 +109,7 @@ class CaseStoreAdapter {
     const url = endpoint(config().ownerStatePath || '/v1/owner-state');
     if (url && this.centralBackendConnected) {
       try {
-        const response = await fetch(url, {
+        const response = await fetchWithTimeout(url, {
           credentials: config().ownerStateCredentials || 'omit',
           cache: 'no-store',
           headers: { Accept: 'application/json' }
@@ -253,7 +263,7 @@ class OutreachAdapter {
       this.lastHealth = null;
       return false;
     }
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       credentials: 'omit',
       cache: 'no-store',
       headers: { Accept: 'application/json' }

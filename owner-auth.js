@@ -27,6 +27,16 @@
     return body;
   }
 
+  async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error('OWNER_AUTH_TIMEOUT')), timeoutMs);
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   function creationOptions(options) {
     return {
       ...options,
@@ -100,7 +110,7 @@
 
     async status() {
       if (!this.connected) return { enrolled: false, credentialCount: 0, verified: false };
-      const response = await fetch(endpoint(config().ownerAuthStatusPath || '/v1/auth/status'), {
+      const response = await fetchWithTimeout(endpoint(config().ownerAuthStatusPath || '/v1/auth/status'), {
         credentials: 'omit',
         headers: { Accept: 'application/json' }
       });

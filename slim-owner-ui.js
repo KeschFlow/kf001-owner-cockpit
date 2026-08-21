@@ -184,28 +184,28 @@
 
     actionBtn.classList.add('hidden');
     if (document.getElementById('registerPasskeyBtn')) {
-      action.textContent = 'Owner-Passkey registrieren, damit Entscheidungen gespeichert werden können.';
+      text('slimNextAction', 'Owner-Passkey registrieren, damit Entscheidungen gespeichert werden können.');
       action.className = 'mt-1 text-sm font-bold text-amber-300';
-      actionBtn.textContent = 'PASSKEY REGISTRIEREN';
+      text('slimActionBtn', 'PASSKEY REGISTRIEREN');
       actionBtn.classList.remove('hidden');
     } else if (gateText.includes('OWNER GATE 1 · LIVE')) {
-      action.textContent = 'Owner-Entscheidung fällig: APPROVE oder REJECT.';
+      text('slimNextAction', 'Owner-Entscheidung fällig: APPROVE oder REJECT.');
       action.className = 'mt-1 text-sm font-bold text-amber-300';
-      actionBtn.textContent = 'ENTSCHEIDUNG ÖFFNEN';
+      text('slimActionBtn', 'ENTSCHEIDUNG ÖFFNEN');
       actionBtn.classList.remove('hidden');
     } else if (gateText.includes('DISPATCHED')) {
-      action.textContent = 'Outreach versendet. Auf Ergebnis bzw. Zahlung warten.';
+      text('slimNextAction', 'Outreach versendet. Auf Ergebnis bzw. Zahlung warten.');
       action.className = 'mt-1 text-sm font-bold text-emerald-300';
     } else if (gateText.includes('REJECTED')) {
-      action.textContent = 'Keine Aktion: letzter Kandidat wurde abgelehnt.';
+      text('slimNextAction', 'Keine Aktion: letzter Kandidat wurde abgelehnt.');
       action.className = 'mt-1 text-sm font-bold text-slate-300';
     } else if (gateText.includes('NO QUALIFIED ECONOMIC WINNER') || gateText.includes('keine Owner-Entscheidung')) {
-      action.textContent = 'Keine Aktion. Radar sucht im Hintergrund weiter.';
+      text('slimNextAction', 'Keine Aktion. Radar sucht im Hintergrund weiter.');
       action.className = 'mt-1 text-sm font-bold text-slate-300';
     } else if (gateText.includes('LOCKED')) {
-      action.textContent = 'Owner Gate ist gesperrt. Prüfe Passkey-/Backend-Status.';
+      text('slimNextAction', 'Owner Gate ist gesperrt. Prüfe Passkey-/Backend-Status.');
       action.className = 'mt-1 text-sm font-bold text-amber-300';
-      actionBtn.textContent = 'STATUS ÖFFNEN';
+      text('slimActionBtn', 'STATUS ÖFFNEN');
       actionBtn.classList.remove('hidden');
     }
   }
