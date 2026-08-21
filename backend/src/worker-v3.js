@@ -67,6 +67,7 @@ async function handleStripeWebhook(request, env) {
   return json({ ok: true, received: true });
 }
 
+// A sidecar failure must never break the proven radar or owner-gate response.
 async function runAutonomySidecar(env) {
   try {
     const contactEnrichment = await enrichQualifiedContacts(env);

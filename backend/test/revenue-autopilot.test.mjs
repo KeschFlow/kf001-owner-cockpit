@@ -14,6 +14,13 @@ test('revenue autopilot sends only a hard-qualified current winner and caps new 
   assert.match(autopilot, /e\.economically_qualified = 1/);
   assert.match(autopilot, /e\.economic_score >= \?1/);
   assert.match(autopilot, /e\.amount_approx_usd >= \?2/);
+  assert.match(autopilot, /e\.solvability_score >= 65/);
+  assert.match(autopilot, /e\.reachability_score >= 65/);
+  assert.match(autopilot, /e\.evidence_score >= 55/);
+  assert.match(autopilot, /e\.effort_score <= 70/);
+  assert.match(autopilot, /e\.uncertainty_score <= 55/);
+  assert.match(autopilot, /find\(autoContactAllowed\)/);
+  assert.match(autopilot, /LIMIT 20/);
   assert.match(autopilot, /AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY/);
   assert.match(autopilot, /AUTO_CONTACT_NOT_VERIFIED_PUBLIC/);
   assert.match(autopilot, /AUTOPILOT_OUTREACH_SENT/);

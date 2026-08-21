@@ -317,9 +317,11 @@ async function openAutopilotCase(env) {
 async function currentWinner(env) {
   const minScore = numericEnv(env, 'AUTOPILOT_MIN_ECONOMIC_SCORE', DEFAULT_MIN_SCORE);
   const minValue = numericEnv(env, 'AUTOPILOT_MIN_VALUE_USD', DEFAULT_MIN_VALUE_USD);
-  return env.CASE_DB.prepare(`
+  const rows = await env.CASE_DB.prepare(`
     SELECT c.public_case_id, c.status, c.is_active,
            e.economic_score, e.amount_approx_usd, e.economically_qualified,
+           e.solvability_score, e.reachability_score, e.evidence_score,
+           e.effort_score, e.uncertainty_score,
            d.recipient_email, d.recipient_name, d.subject,
            r.source_title, r.contact_route
       FROM cases c
@@ -331,10 +333,18 @@ async function currentWinner(env) {
        AND e.economically_qualified = 1
        AND e.economic_score >= ?1
        AND e.amount_approx_usd >= ?2
+       AND e.solvability_score >= 65
+       AND e.reachability_score >= 65
+       AND e.evidence_score >= 55
+       AND e.effort_score <= 70
+       AND e.uncertainty_score <= 55
        AND e.selected_at IS NOT NULL
-     ORDER BY e.economic_score DESC, e.amount_approx_usd DESC, e.selected_at DESC
-     LIMIT 1
-  `).bind(minScore, minValue).first();
+     ORDER BY e.economic_score DESC, e.solvability_score DESC,
+              e.reachability_score DESC, e.amount_approx_usd DESC, e.selected_at DESC
+     LIMIT 20
+  `).bind(minScore, minValue).all();
+
+  return (rows.results || []).find(autoContactAllowed) || null;
 }
 
 function autoContactAllowed(row) {
