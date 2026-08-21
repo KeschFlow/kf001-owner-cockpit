@@ -83,15 +83,15 @@ function webhookDb(recordOverrides = {}) {
       if (event?.status === 'PROCESSING') Object.assign(event, { status: 'REJECTED', errorCode: values[1] });
       return { meta: { changes: event ? 1 : 0 } };
     }
-    if (sql.includes("SET stage = 'PAID'")) {
-      const [caseId, paidAt, paymentIntentId, eventId, sessionId, expectedAmount] = values;
+    if (sql.includes('UPDATE revenue_autopilot') && sql.includes("payment_status = 'PAID'")) {
+      const [caseId, paidAt, paymentIntentId, eventId, sessionId, expectedAmount, paidStage, expectedStage] = values;
       const matches = state.record.public_case_id === caseId
-        && state.record.stage === 'PAYMENT_PENDING'
+        && state.record.stage === expectedStage
         && state.record.stripe_checkout_session_id === sessionId
-        && state.record.calculated_fee_minor === expectedAmount;
+        && (state.record.fixed_offer_amount_cents ?? state.record.calculated_fee_minor ?? state.record.success_fee_amount_cents) === expectedAmount;
       if (!matches) return { meta: { changes: 0 } };
       Object.assign(state.record, {
-        stage: 'PAID', payment_status: 'PAID', payment_confirmed_at: paidAt,
+        stage: paidStage, payment_status: 'PAID', payment_confirmed_at: paidAt,
         stripe_payment_intent_id: paymentIntentId, stripe_payment_event_id: eventId
       });
       return { meta: { changes: 1 } };
@@ -217,4 +217,23 @@ test('valid paid Checkout closes the case once and duplicate event is idempotent
   assert.equal((await duplicate.json()).duplicate, true);
   assert.equal(db.state.paymentRows, 1);
   assert.equal(db.state.stateEvents, 1);
+});
+
+test('paid case check stays active and waits for evidence', async () => {
+  const db = webhookDb({
+    stage: 'CASE_CHECK_PAYMENT_PENDING',
+    offer_type: 'CASE_CHECK_49',
+    fixed_offer_amount_cents: 4900
+  });
+  const event = validEvent({ session: {
+    amount_total: 4900,
+    metadata: {
+      product_type: 'CASE_CHECK_49',
+      expected_amount_cents: '4900'
+    }
+  } });
+  const response = await deliver(event, db);
+  assert.equal(response.status, 200);
+  assert.equal(db.state.record.stage, 'CASE_CHECK_PAID_AWAITING_EVIDENCE');
+  assert.equal(db.state.record.payment_status, 'PAID');
 });
