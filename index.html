@@ -8,10 +8,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="KF001 Fallradar">
   <title>KF001 Fallradar</title>
-
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" href="./app-icon.svg" sizes="any" type="image/svg+xml">
-
   <style>
     html,body{margin:0;min-height:100%;background:#0f172a;color:#f8fafc;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
     body{min-height:100vh;min-height:100dvh}
@@ -22,7 +20,6 @@
     #bootState{font-size:14px;font-weight:700;color:#fbbf24}
     button{font:inherit}
   </style>
-
   <script>
     (() => {
       const params = new URLSearchParams(location.hash.replace(/^#/, ''));
@@ -33,8 +30,7 @@
       }
     })();
   </script>
-
-  <script src="./governance-config.js?v=1.6.0"></script>
+  <script src="./governance-config.js?v=1.7.0"></script>
   <script defer src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-900 text-slate-100">
@@ -42,7 +38,7 @@
     <div id="bootCard">
       <div id="bootLabel">KF001</div>
       <div id="bootTitle">FALLRADAR</div>
-      <div id="bootState">System wird verbunden …</div>
+      <div id="bootState">Oberfläche wird gestartet …</div>
     </div>
   </div>
 
@@ -52,32 +48,41 @@
 
   <script src="./owner-auth.js?v=1.6.1"></script>
   <script src="./adapters.js?v=1.4.5"></script>
+  <script src="./radar-ui.js?v=1.2.0"></script>
+  <script src="./truth-ui-fix.js?v=1.1.0"></script>
   <script src="./governance.js?v=1.5.2"></script>
+  <script src="./slim-owner-ui.js?v=1.2.0"></script>
   <script>
     document.addEventListener('DOMContentLoaded', () => {
       const fallback = document.getElementById('bootFallback');
       const reveal = () => {
-        if (document.getElementById('kfSlimOwner')) {
-          if (fallback) fallback.remove();
-          return true;
-        }
-        return false;
+        const shell = document.getElementById('kfSlimOwner');
+        if (!shell) return false;
+        if (fallback) fallback.remove();
+        return true;
       };
-      if (reveal()) return;
-      const observer = new MutationObserver(() => {
-        if (reveal()) observer.disconnect();
-      });
-      observer.observe(document.body, { childList:true, subtree:true });
-      setTimeout(() => {
-        if (!reveal()) {
-          const state = document.getElementById('bootState');
-          if (state) state.textContent = 'Verbindung dauert länger – Backend wird weiter geladen …';
-        }
-      }, 5000);
+      if (!reveal()) {
+        const observer = new MutationObserver(() => {
+          if (reveal()) observer.disconnect();
+        });
+        observer.observe(document.body, { childList:true, subtree:true });
+        setTimeout(() => {
+          if (!reveal()) {
+            observer.disconnect();
+            const state = document.getElementById('bootState');
+            if (state) state.textContent = 'UI konnte nicht gestartet werden. Seite neu laden.';
+          }
+        }, 4000);
+      }
     }, { once:true });
 
     if ('serviceWorker' in navigator) {
-      addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}), { once:true });
+      addEventListener('load', async () => {
+        try {
+          const reg = await navigator.serviceWorker.register('./sw.js?v=12');
+          await reg.update();
+        } catch (_) {}
+      }, { once:true });
     }
   </script>
 </body>
