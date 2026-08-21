@@ -9,7 +9,14 @@ REVENUE_AUTOPILOT_ENABLED = "true"
 AUTOPILOT_MIN_ECONOMIC_SCORE = "72"
 AUTOPILOT_MIN_VALUE_USD = "8000"
 AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY = "1"
-SUCCESS_FEE_EUR = "750"
+SUCCESS_FEE_PERCENT = "10"
+SUCCESS_FEE_MIN_EUR = "750"
+SUCCESS_FEE_MAX_EUR = "5000"
+SUCCESS_MIN_RECOVERED_USD = "8000"
+SUCCESS_FEE_EUR_USD_RATE = "0.90"
+USD_TO_EUR_RATE = "0.90"
+STRIPE_SUCCESS_URL = "https://keschflow.github.io/kf001-owner-cockpit/?payment=success"
+STRIPE_CANCEL_URL = "https://keschflow.github.io/kf001-owner-cockpit/?payment=cancelled"
 
 [secrets]
 required = [
@@ -18,7 +25,9 @@ required = [
   "GMAIL_CLIENT_ID",
   "GMAIL_CLIENT_SECRET",
   "GMAIL_REFRESH_TOKEN",
-  "GMAIL_FROM"
+  "GMAIL_FROM",
+  "STRIPE_SECRET_KEY",
+  "STRIPE_WEBHOOK_SECRET"
 ]
 
 [triggers]
