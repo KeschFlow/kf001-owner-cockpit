@@ -46,13 +46,13 @@
     <section id="ownerGateContainer"></section>
   </main>
 
-  <script src="./owner-auth.js?v=1.6.1"></script>
-  <script src="./adapters.js?v=1.4.5"></script>
+  <script src="./owner-auth.js?v=1.6.2"></script>
+  <script src="./adapters.js?v=1.4.6"></script>
   <!-- Cockpit shell starts before optional radar/governance modules. -->
-  <script src="./slim-owner-ui.js?v=1.2.1"></script>
+  <script src="./slim-owner-ui.js?v=1.2.2"></script>
   <script src="./radar-ui.js?v=1.2.0"></script>
   <script src="./truth-ui-fix.js?v=1.1.0"></script>
-  <script src="./governance.js?v=1.5.2"></script>
+  <script src="./governance.js?v=1.5.3"></script>
   <script>
     document.addEventListener('DOMContentLoaded', () => {
       const fallback = document.getElementById('bootFallback');
@@ -80,7 +80,7 @@
     if ('serviceWorker' in navigator) {
       addEventListener('load', async () => {
         try {
-          const reg = await navigator.serviceWorker.register('./sw.js?v=13');
+          const reg = await navigator.serviceWorker.register('./sw.js?v=14');
           await reg.update();
         } catch (_) {}
       }, { once:true });
