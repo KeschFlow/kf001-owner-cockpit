@@ -105,17 +105,24 @@ export async function handleStripeWebhook(request, env) {
   if (String(session.client_reference_id || '') !== publicCaseId) return rejectStripeEvent(env, eventId, 'CLIENT_REFERENCE_MISMATCH');
 
   const record = await env.CASE_DB.prepare(`
-    SELECT public_case_id, stage, payment_status, calculated_fee_minor,
-           success_fee_amount_cents, success_fee_currency, stripe_checkout_session_id
+    SELECT public_case_id, stage, payment_status, offer_type, fixed_offer_amount_cents,
+           calculated_fee_minor, success_fee_amount_cents, success_fee_currency, stripe_checkout_session_id
       FROM revenue_autopilot
      WHERE public_case_id = ?1
   `).bind(publicCaseId).first();
-  if (!record || record.stage !== 'PAYMENT_PENDING') return rejectStripeEvent(env, eventId, 'OPEN_PAYMENT_RECORD_NOT_FOUND');
+  const isCaseCheck = String(session.metadata?.product_type || '') === 'CASE_CHECK_49';
+  const expectedStage = isCaseCheck ? 'CASE_CHECK_PAYMENT_PENDING' : 'PAYMENT_PENDING';
+  if (!record || record.stage !== expectedStage) return rejectStripeEvent(env, eventId, 'OPEN_PAYMENT_RECORD_NOT_FOUND');
+  if (isCaseCheck !== (record.offer_type === 'CASE_CHECK_49')) return rejectStripeEvent(env, eventId, 'PAYMENT_PRODUCT_MISMATCH');
   if (String(record.stripe_checkout_session_id || '') !== sessionId) return rejectStripeEvent(env, eventId, 'STRIPE_SESSION_MISMATCH');
 
   const amount = Number(session.amount_total);
-  const expectedAmount = Number(record.calculated_fee_minor ?? record.success_fee_amount_cents);
-  const metadataAmount = Number(session.metadata?.success_fee_amount_cents);
+  const expectedAmount = isCaseCheck
+    ? Number(record.fixed_offer_amount_cents)
+    : Number(record.calculated_fee_minor ?? record.success_fee_amount_cents);
+  const metadataAmount = Number(isCaseCheck
+    ? session.metadata?.expected_amount_cents
+    : session.metadata?.success_fee_amount_cents);
   const currency = String(session.currency || '').toUpperCase();
   if (!Number.isInteger(amount) || amount <= 0 || amount !== expectedAmount || metadataAmount !== expectedAmount) {
     return rejectStripeEvent(env, eventId, 'STRIPE_AMOUNT_MISMATCH');
@@ -130,29 +137,31 @@ export async function handleStripeWebhook(request, env) {
   const paymentBatch = await env.CASE_DB.batch([
     env.CASE_DB.prepare(`
       UPDATE revenue_autopilot
-         SET stage = 'PAID', payment_status = 'PAID', payment_confirmed_at = ?2,
+         SET stage = ?7, payment_status = 'PAID', payment_confirmed_at = ?2,
              stripe_payment_intent_id = ?3, stripe_payment_event_id = ?4,
              error_code = NULL, updated_at = ?2
-       WHERE public_case_id = ?1 AND stage = 'PAYMENT_PENDING'
-         AND stripe_checkout_session_id = ?5 AND calculated_fee_minor = ?6
-    `).bind(publicCaseId, paidAt, paymentIntentId, eventId, sessionId, expectedAmount),
+       WHERE public_case_id = ?1 AND stage = ?8
+         AND stripe_checkout_session_id = ?5
+         AND COALESCE(fixed_offer_amount_cents, calculated_fee_minor, success_fee_amount_cents) = ?6
+    `).bind(publicCaseId, paidAt, paymentIntentId, eventId, sessionId, expectedAmount,
+      isCaseCheck ? 'CASE_CHECK_PAID_AWAITING_EVIDENCE' : 'PAID', expectedStage),
     env.CASE_DB.prepare(`
       UPDATE cases
-         SET status = 'RESPONSE_RECEIVED', is_active = 0, version = version + 1, updated_at = ?2
+         SET status = 'RESPONSE_RECEIVED', is_active = ?4, version = version + 1, updated_at = ?2
        WHERE public_case_id = ?1
          AND EXISTS (
            SELECT 1 FROM revenue_autopilot
             WHERE public_case_id = ?1 AND stripe_payment_event_id = ?3 AND payment_status = 'PAID'
          )
-    `).bind(publicCaseId, paidAt, eventId),
+    `).bind(publicCaseId, paidAt, eventId, isCaseCheck ? 1 : 0),
     env.CASE_DB.prepare(`
       INSERT INTO state_events (public_case_id, event_type, state, source, created_at)
-      SELECT ?1, 'AUTOPILOT_PAYMENT_CONFIRMED', 'PAID', 'STRIPE_WEBHOOK', ?2
+      SELECT ?1, ?4, 'PAID', 'STRIPE_WEBHOOK', ?2
        WHERE EXISTS (
          SELECT 1 FROM revenue_autopilot
           WHERE public_case_id = ?1 AND stripe_payment_event_id = ?3 AND payment_status = 'PAID'
        )
-    `).bind(publicCaseId, paidAt, eventId),
+    `).bind(publicCaseId, paidAt, eventId, isCaseCheck ? 'CASE_CHECK_PAYMENT_CONFIRMED' : 'AUTOPILOT_PAYMENT_CONFIRMED'),
     env.CASE_DB.prepare(`
       INSERT OR IGNORE INTO stripe_payments (event_id, session_id, amount_minor, currency, paid_at)
       SELECT ?1, ?2, ?3, 'EUR', ?4
