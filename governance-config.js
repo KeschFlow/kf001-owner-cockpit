@@ -17,12 +17,3 @@ globalThis.KF001_CONFIG = Object.freeze({
   evidencePath: '/v1/evidence',
   pushPublicKey: ''
 });
-
-(() => {
-  for (const src of ['./radar-ui.js', './truth-ui-fix.js', './slim-owner-ui.js?v=1.1.0']) {
-    const script = document.createElement('script');
-    script.src = src;
-    script.async = false;
-    document.head.appendChild(script);
-  }
-})();
