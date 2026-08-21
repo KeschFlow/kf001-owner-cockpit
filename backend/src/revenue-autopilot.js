@@ -1,6 +1,7 @@
 import { getGmailThread, gmailConfigured, sendGmail, sendGmailReply } from './gmail.js';
 import {
   calculateSuccessFee,
+  createCaseCheckCheckoutSession,
   createSuccessFeeCheckoutSession,
   stripeIdempotencyKey,
   stripeCheckoutConfigured,
@@ -24,6 +25,8 @@ const OPEN_STAGES = new Set([
   'SUCCESS_CONFIRMED_PAYMENT_SETUP_REQUIRED',
   'PAYMENT_MESSAGE_SEND_UNKNOWN',
   'PAYMENT_PENDING'
+  ,'CASE_CHECK_PAYMENT_PENDING'
+  ,'CASE_CHECK_PAID_AWAITING_EVIDENCE'
 ]);
 
 const CLOSED_STAGES = new Set([
@@ -40,6 +43,10 @@ const clean = (value, max = 4000) => String(value || '').replace(/\s+/g, ' ').tr
 
 function enabled(env) {
   return String(env.REVENUE_AUTOPILOT_ENABLED || '').toLowerCase() === 'true';
+}
+
+function caseCheckEnabled(env) {
+  return String(env.CASE_CHECK_ENABLED || '').toLowerCase() === 'true';
 }
 
 function numericEnv(env, key, fallback) {
@@ -179,6 +186,31 @@ function initialMessage(row, env) {
     'If this is still unresolved and you want me to proceed, reply YES. I will then send the short engagement confirmation and evidence checklist.',
     '',
     'If it is resolved or you do not want to be contacted, reply NO and I will close the case. I will not send unsolicited follow-ups if you do not reply.',
+    '',
+    'KeschFlow'
+  ].join('\n');
+}
+
+function caseCheckMessage(row, checkoutUrl, amountEur) {
+  const name = clean(row.recipient_name, 120);
+  return [
+    name ? `Hello ${name},` : 'Hello,',
+    '',
+    `I found your public platform/billing report: “${clean(row.source_title, 240)}”.`,
+    '',
+    `I can turn the available material into a focused Platform/Billing Case Check for EUR ${amountEur.toFixed(2)}. It includes:`,
+    '1. reconstructed timeline and strongest provable facts,',
+    '2. missing evidence and weak points,',
+    '3. the smallest credible escalation route,',
+    '4. a ready-to-send escalation letter.',
+    '',
+    'No passwords, API keys or account access are required. This is structured case and escalation support, not legal representation, and no outcome is guaranteed.',
+    '',
+    `Individual Stripe Checkout: ${checkoutUrl}`,
+    '',
+    'After payment, reply to this email with the invoices, support case IDs, key messages, important dates and desired outcome. Do not send credentials.',
+    '',
+    'If this is resolved or not relevant, reply NO and I will close the case. No unsolicited follow-up will be sent.',
     '',
     'KeschFlow'
   ].join('\n');
@@ -564,6 +596,34 @@ async function currentWinner(env) {
   return (rows.results || []).find(autoContactAllowed) || null;
 }
 
+async function currentCaseCheckCandidate(env) {
+  if (!caseCheckEnabled(env)) return null;
+  const minScore = numericEnv(env, 'CASE_CHECK_MIN_ECONOMIC_SCORE', 58);
+  const minValue = numericEnv(env, 'CASE_CHECK_MIN_VALUE_USD', 500);
+  const rows = await env.CASE_DB.prepare(`
+    SELECT c.public_case_id, c.status, c.is_active,
+           e.economic_score, e.amount_approx_usd, e.solvability_score,
+           e.reachability_score, e.evidence_score, e.effort_score, e.uncertainty_score,
+           d.recipient_email, d.recipient_name, d.subject,
+           r.source_title, r.contact_route
+      FROM cases c
+      JOIN case_economic_scores e ON e.public_case_id = c.public_case_id
+      JOIN dispatch_targets d ON d.public_case_id = c.public_case_id
+      JOIN radar_candidates r ON r.public_case_id = c.public_case_id
+     WHERE c.is_active = 1 AND c.status = 'PENDING_APPROVAL'
+       AND e.economic_score >= ?1 AND e.amount_approx_usd >= ?2
+       AND e.solvability_score >= 50 AND e.reachability_score >= 60
+       AND e.evidence_score >= 45 AND e.effort_score <= 75 AND e.uncertainty_score <= 60
+       AND NOT EXISTS (
+         SELECT 1 FROM revenue_autopilot a WHERE a.public_case_id = c.public_case_id
+       )
+     ORDER BY e.economic_score DESC, e.reachability_score DESC,
+              e.evidence_score DESC, e.amount_approx_usd DESC
+     LIMIT 20
+  `).bind(minScore, minValue).all();
+  return (rows.results || []).find(autoContactAllowed) || null;
+}
+
 function autoContactAllowed(row) {
   const email = String(row?.recipient_email || '').trim();
   if (!email) return false;
@@ -651,6 +711,83 @@ async function sendInitialOutreach(env, row) {
   return { ok: true, action: 'OUTREACH_SENT', caseId: row.public_case_id, messageId: sent.id, threadId: sent.threadId };
 }
 
+async function sendCaseCheckOffer(env, row) {
+  if (!gmailConfigured(env)) return { ok: false, reason: 'GMAIL_NOT_CONFIGURED' };
+  if (!stripeCheckoutConfigured(env)) return { ok: false, reason: 'STRIPE_NOT_CONFIGURED' };
+  if (!autoContactAllowed(row)) return { ok: false, reason: 'AUTO_CONTACT_NOT_VERIFIED_PUBLIC' };
+  if (!(await claimDailyQuota(env))) return { ok: false, reason: 'DAILY_OUTREACH_CAP_REACHED' };
+
+  const subject = clean(row.subject || 'Platform/Billing Case Check for your public report', 300);
+  const claimedAt = nowIso();
+  try {
+    await env.CASE_DB.prepare(`
+      INSERT INTO revenue_autopilot (
+        public_case_id, stage, economic_score, amount_approx_usd,
+        recipient_email, recipient_name, subject, offer_type, updated_at
+      ) VALUES (?1, 'CONTACT_CLAIMED', ?2, ?3, ?4, ?5, ?6, 'CASE_CHECK_49', ?7)
+    `).bind(row.public_case_id, Number(row.economic_score || 0), Number(row.amount_approx_usd || 0),
+      row.recipient_email, row.recipient_name || null, subject, claimedAt).run();
+  } catch {
+    return { ok: false, reason: 'ALREADY_CLAIMED' };
+  }
+
+  let checkout;
+  try {
+    checkout = await createCaseCheckCheckoutSession(env, {
+      publicCaseId: row.public_case_id,
+      customerEmail: row.recipient_email
+    });
+    await env.CASE_DB.prepare(`
+      UPDATE revenue_autopilot
+         SET stripe_checkout_session_id = ?2, stripe_checkout_url = ?3,
+             checkout_created_at = ?4, checkout_expires_at = ?5,
+             fixed_offer_amount_cents = ?6, success_fee_currency = 'EUR', updated_at = ?4
+       WHERE public_case_id = ?1 AND offer_type = 'CASE_CHECK_49'
+    `).bind(row.public_case_id, checkout.id, checkout.url, nowIso(), checkout.expiresAt, checkout.amountCents).run();
+  } catch (error) {
+    await env.CASE_DB.prepare(`
+      UPDATE revenue_autopilot SET stage = 'CLOSED_OTHER', error_code = ?2, updated_at = ?3
+       WHERE public_case_id = ?1
+    `).bind(row.public_case_id, clean(error.message, 120), nowIso()).run();
+    return { ok: false, reason: 'CASE_CHECK_CHECKOUT_FAILED', error: clean(error.message, 120) };
+  }
+
+  const body = caseCheckMessage(row, checkout.url, checkout.amountCents / 100);
+  let sent;
+  try {
+    sent = await sendGmail(env, { to: row.recipient_email, subject, text: body });
+  } catch (error) {
+    await env.CASE_DB.prepare(`
+      UPDATE revenue_autopilot SET stage = 'SEND_UNKNOWN', error_code = ?2, updated_at = ?3
+       WHERE public_case_id = ?1
+    `).bind(row.public_case_id, clean(error.message || 'GMAIL_SEND_FAILED', 120), nowIso()).run();
+    return { ok: false, reason: 'SEND_UNKNOWN' };
+  }
+
+  const sentAt = nowIso();
+  await env.CASE_DB.batch([
+    env.CASE_DB.prepare(`
+      UPDATE revenue_autopilot
+         SET stage = 'CASE_CHECK_PAYMENT_PENDING', initial_message_id = ?2, gmail_thread_id = ?3,
+             initial_sent_at = ?4, payment_requested_at = ?4, payment_status = 'REQUESTED', error_code = NULL, updated_at = ?4
+       WHERE public_case_id = ?1
+    `).bind(row.public_case_id, sent.id, sent.threadId, sentAt),
+    env.CASE_DB.prepare(`
+      UPDATE cases SET outreach_message = ?2, status = 'DISPATCHED', version = version + 1, updated_at = ?3
+       WHERE public_case_id = ?1
+    `).bind(row.public_case_id, body, sentAt),
+    env.CASE_DB.prepare(`
+      INSERT OR IGNORE INTO dispatch_log (public_case_id, provider, provider_message_id, recipient_email, status, error_code, created_at)
+      VALUES (?1, 'GMAIL_AUTOPILOT', ?2, ?3, 'SENT', NULL, ?4)
+    `).bind(row.public_case_id, sent.id, row.recipient_email, sentAt),
+    env.CASE_DB.prepare(`
+      INSERT INTO state_events (public_case_id, event_type, state, source, created_at)
+      VALUES (?1, 'CASE_CHECK_OFFER_SENT', 'PAYMENT_PENDING', 'REVENUE_AUTOPILOT', ?2)
+    `).bind(row.public_case_id, sentAt)
+  ]);
+  return { ok: true, action: 'CASE_CHECK_OFFER_SENT', caseId: row.public_case_id, amountCents: checkout.amountCents };
+}
+
 async function updateInbound(env, record, message, classification) {
   await env.CASE_DB.prepare(`
     UPDATE revenue_autopilot
@@ -707,7 +844,8 @@ async function handleInbound(env, record, message) {
     return { ok: true, action: 'ENGAGED', caseId: record.public_case_id, messageId: sent.id };
   }
 
-  if ((record.stage === 'ENGAGED' || record.stage === 'EVIDENCE_RECEIVED') && classification === 'EVIDENCE') {
+  if ((record.stage === 'ENGAGED' || record.stage === 'EVIDENCE_RECEIVED' || record.stage === 'CASE_CHECK_PAID_AWAITING_EVIDENCE')
+    && classification === 'EVIDENCE') {
     if (record.stage !== 'EVIDENCE_RECEIVED') {
       await env.CASE_DB.prepare(`
         UPDATE revenue_autopilot SET stage = 'EVIDENCE_RECEIVED', evidence_received_at = ?2, updated_at = ?2
@@ -780,6 +918,17 @@ async function monitorOpenCase(env, record) {
     }
   }
 
+  if (record.stage === 'CASE_CHECK_PAYMENT_PENDING') {
+    const expiresAt = Date.parse(record.checkout_expires_at || '');
+    if (Number.isFinite(expiresAt) && Date.now() >= expiresAt) {
+      await env.CASE_DB.prepare(`
+        UPDATE revenue_autopilot SET stage = 'CLOSED_NO_RESPONSE', updated_at = ?2
+         WHERE public_case_id = ?1 AND stage = 'CASE_CHECK_PAYMENT_PENDING'
+      `).bind(record.public_case_id, nowIso()).run();
+      return { ok: true, action: 'CASE_CHECK_EXPIRED', caseId: record.public_case_id };
+    }
+  }
+
   return { ok: true, action: 'WAITING_FOR_REPLY', caseId: record.public_case_id, stage: record.stage };
 }
 
@@ -798,6 +947,8 @@ export async function revenueAutopilotStatus(env) {
     feeMinEur: pricing.feeMinEur,
     feeMaxEur: pricing.feeMaxEur,
     stripeCheckoutReady: stripeCheckoutConfigured(env),
+    caseCheckEnabled: caseCheckEnabled(env),
+    caseCheckPriceEur: numericEnv(env, 'CASE_CHECK_PRICE_EUR', 49),
     paymentStatus: latest.payment_status || null
   } : {
     enabled: enabled(env),
@@ -807,6 +958,8 @@ export async function revenueAutopilotStatus(env) {
     feeMinEur: pricing.feeMinEur,
     feeMaxEur: pricing.feeMaxEur,
     stripeCheckoutReady: stripeCheckoutConfigured(env),
+    caseCheckEnabled: caseCheckEnabled(env),
+    caseCheckPriceEur: numericEnv(env, 'CASE_CHECK_PRICE_EUR', 49),
     paymentStatus: null
   };
 }
@@ -822,8 +975,10 @@ export async function runRevenueAutopilot(env) {
     if (open) return await monitorOpenCase(env, open);
 
     const winner = await currentWinner(env);
-    if (!winner) return { ok: true, enabled: true, action: 'NO_WINNER' };
-    return await sendInitialOutreach(env, winner);
+    if (winner) return await sendInitialOutreach(env, winner);
+    const caseCheckCandidate = await currentCaseCheckCandidate(env);
+    if (caseCheckCandidate) return await sendCaseCheckOffer(env, caseCheckCandidate);
+    return { ok: true, enabled: true, action: 'NO_WINNER' };
   } finally {
     await releaseLock(env, token).catch(() => {});
   }
@@ -837,4 +992,6 @@ export const REVENUE_AUTOPILOT_INTERNALS = Object.freeze({
   extractApproxUsd,
   paymentMessage,
   requestDynamicPayment
+  ,caseCheckMessage,
+  currentCaseCheckCandidate
 });
