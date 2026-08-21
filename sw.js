@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kf001-owner-cockpit-v10-terminal-gate-hardening';
+const CACHE_NAME = 'kf001-owner-cockpit-v11-interactive-owner-ui';
 const APP_SHELL = [
   './',
   './index.html',
@@ -8,7 +8,9 @@ const APP_SHELL = [
   './owner-auth.js',
   './adapters.js',
   './governance.js',
-  './radar-ui.js'
+  './radar-ui.js',
+  './truth-ui-fix.js',
+  './slim-owner-ui.js'
 ];
 
 self.addEventListener('install', (event) => {
