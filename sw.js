@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kf001-owner-cockpit-v12-deterministic-boot';
+const CACHE_NAME = 'kf001-owner-cockpit-v13-cockpit-first';
 const APP_SHELL = [
   './',
   './index.html',

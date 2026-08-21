@@ -15,7 +15,7 @@
 
   function text(id, value) {
     const el = document.getElementById(id);
-    if (el) el.textContent = value;
+    if (el && el.textContent !== String(value)) el.textContent = value;
   }
 
   function installSlimShell() {
@@ -102,7 +102,15 @@
     document.getElementById('slimActionBtn')?.addEventListener('click', openCurrentAction);
 
     refreshSlimView();
-    const observer = new MutationObserver(refreshSlimView);
+    let refreshPending = false;
+    const observer = new MutationObserver(() => {
+      if (refreshPending) return;
+      refreshPending = true;
+      requestAnimationFrame(() => {
+        refreshPending = false;
+        refreshSlimView();
+      });
+    });
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
   }
 
