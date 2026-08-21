@@ -289,11 +289,12 @@ function retireDemoControls() {
 }
 
 async function initGovernance() {
-  ownerState = await caseStore.loadOwnerState();
-  if (ownerAuth?.connected) {
-    ownerAuthState = await ownerAuth.status().catch(() => ({ enrolled: false, credentialCount: 0, verified: false }));
-  }
-  await outreach.refreshStatus().catch(() => false);
+  const ownerStatePromise = caseStore.loadOwnerState();
+  const ownerAuthPromise = ownerAuth?.connected
+    ? ownerAuth.status().catch(() => ({ enrolled: false, credentialCount: 0, verified: false }))
+    : Promise.resolve({ enrolled: false, credentialCount: 0, verified: false });
+  const outreachPromise = outreach.refreshStatus().catch(() => false);
+  [ownerState, ownerAuthState] = await Promise.all([ownerStatePromise, ownerAuthPromise, outreachPromise]);
   retireDemoControls();
   renderSystemStatus();
   renderOwnerAuth();
