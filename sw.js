@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kf001-owner-cockpit-v11-interactive-owner-ui';
+const CACHE_NAME = 'kf001-owner-cockpit-v12-deterministic-boot';
 const APP_SHELL = [
   './',
   './index.html',
@@ -24,11 +24,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('push', (event) => {
   event.waitUntil((async () => {
     let payload;
-    try {
-      payload = event.data?.json();
-    } catch {
-      return;
-    }
+    try { payload = event.data?.json(); } catch { return; }
     if (!payload || payload.type !== 'OWNER_GATE' || !payload.title || !payload.body) return;
     await self.registration.showNotification(payload.title, {
       body: payload.body,
@@ -58,19 +54,16 @@ self.addEventListener('notificationclick', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(
-        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
-      ))
+      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))))
       .then(() => self.clients.claim())
   );
 });
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
-
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request)
+      fetch(event.request, { cache: 'no-store' })
         .then((response) => {
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put('./index.html', copy));
@@ -84,7 +77,7 @@ self.addEventListener('fetch', (event) => {
   const requestUrl = new URL(event.request.url);
   if (requestUrl.origin === self.location.origin) {
     event.respondWith(
-      fetch(event.request)
+      fetch(event.request, { cache: 'no-store' })
         .then((response) => {
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
@@ -95,11 +88,5 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
-      const copy = response.clone();
-      caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-      return response;
-    }))
-  );
+  event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
 });
