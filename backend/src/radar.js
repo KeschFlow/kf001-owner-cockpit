@@ -155,7 +155,11 @@ function safePublicWebsite(raw) {
   }
 }
 
-function explicitPublicEmail(text) {
+function consumerEmail(email) {
+  return /@(gmail\.com|outlook\.com|hotmail\.com|yahoo\.com|icloud\.com|proton\.me|protonmail\.com)$/i.test(String(email || ''));
+}
+
+export function explicitPublicEmail(text) {
   const source = String(text || '');
   const regex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
   let match;
@@ -165,11 +169,19 @@ function explicitPublicEmail(text) {
     const left = Math.max(0, match.index - 120);
     const right = Math.min(source.length, match.index + email.length + 120);
     const context = source.slice(left, right).toLowerCase();
-    if (/(contact|reach|e-?mail|mail me|write me|write to|contact me|my email|you can reach)/i.test(context)) {
+    const explicitContact = /(contact|reach|e-?mail|mail me|write me|write to|contact me|my email|you can reach)/i.test(context);
+    const publicBusinessAccount = /\baccount\s*:/i.test(context) && !consumerEmail(email);
+    if (explicitContact || publicBusinessAccount) {
       return email;
     }
   }
   return null;
+}
+
+export function automatedOrDigestIssue(item, title, body) {
+  const login = String(item?.user?.login || '');
+  if (String(item?.user?.type || '').toLowerCase() === 'bot' || /\[bot\]$/i.test(login)) return true;
+  return /\b(?:community|tools?) digest\b/i.test(`${title || ''}\n${body || ''}`);
 }
 
 async function publicWebsiteMailto(rawWebsite) {
@@ -524,6 +536,7 @@ async function scanGitHub(env) {
       seen.add(String(item.id));
       const title = clean(item.title, 300);
       const body = String(item.body || '');
+      if (automatedOrDigestIssue(item, title, body)) continue;
       const scores = scoreCandidate(title, body);
       if (scores.caseValueScore < MIN_CASE_SCORE || scores.impactScore < 50 || scores.evidenceScore < 38) continue;
       candidates.push({ item, title, body, scores });
@@ -543,7 +556,7 @@ async function scanGitHub(env) {
       caseId,
       url: String(entry.item.html_url || ''),
       title: entry.title,
-      excerpt: clean(entry.body, 1800),
+      excerpt: clean(entry.body, 6000),
       authorLogin: contact.login || clean(entry.item.user?.login, 80) || null,
       authorName: contact.name || null,
       contactEmail: contact.email,
@@ -593,7 +606,7 @@ async function scanGitLab(env) {
       caseId,
       url: String(entry.item.web_url || ''),
       title: entry.title,
-      excerpt: clean(entry.body, 1800),
+      excerpt: clean(entry.body, 6000),
       authorLogin: contact.login || clean(entry.item.author?.username, 80) || null,
       authorName: contact.name || clean(entry.item.author?.name, 120) || null,
       contactEmail: contact.email,
@@ -669,7 +682,7 @@ async function scanDiscourseSource(env, source) {
       caseId,
       url,
       title: entry.title,
-      excerpt: clean(entry.body, 1800),
+      excerpt: clean(entry.body, 6000),
       authorLogin: contact.login || username,
       authorName: contact.name || null,
       contactEmail: contact.email,

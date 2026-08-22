@@ -1,10 +1,28 @@
 const ECONOMIC_SCORING_VERSION = 'ECON_V1';
 const MIN_ECONOMIC_SCORE = 72;
 const MIN_APPROX_USD_VALUE = 8000;
+const DEFAULT_CASE_CHECK_MIN_SCORE = 58;
+const DEFAULT_CASE_CHECK_MIN_VALUE_USD = 500;
 const TERMINAL_CASE_STATUSES = new Set(['DISPATCHED', 'RESPONSE_RECEIVED', 'REJECTED']);
 
 const clamp = (value, min = 0, max = 100) => Math.max(min, Math.min(max, value));
 const clean = (value, max = 4000) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+
+function numericEnv(env, key, fallback) {
+  const value = Number(env?.[key]);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+export function caseCheckEligible(score, env = {}) {
+  if (String(env.CASE_CHECK_ENABLED || '').toLowerCase() !== 'true') return false;
+  return Number(score?.economicScore || 0) >= numericEnv(env, 'CASE_CHECK_MIN_ECONOMIC_SCORE', DEFAULT_CASE_CHECK_MIN_SCORE)
+    && Number(score?.amountApproxUsd || 0) >= numericEnv(env, 'CASE_CHECK_MIN_VALUE_USD', DEFAULT_CASE_CHECK_MIN_VALUE_USD)
+    && Number(score?.solvability || 0) >= 50
+    && Number(score?.reachability || 0) >= 60
+    && Number(score?.evidence || 0) >= 45
+    && Number(score?.effort || 100) <= 75
+    && Number(score?.uncertainty || 100) <= 60;
+}
 
 const CURRENCY_TO_APPROX_USD = {
   USD: 1,
@@ -324,7 +342,9 @@ export async function selectBestEconomicCandidate(env) {
     Number(b.row.evidence_score || 0) - Number(a.row.evidence_score || 0)
   );
 
-  const winner = scored.find((entry) => entry.score.economicallyQualified) || null;
+  const fullWinner = scored.find((entry) => entry.score.economicallyQualified) || null;
+  const caseCheckWinner = fullWinner ? null : scored.find((entry) => caseCheckEligible(entry.score, env)) || null;
+  const winner = fullWinner || caseCheckWinner;
   if (!winner) {
     return {
       selectedCaseId: active?.public_case_id || null,
@@ -336,13 +356,16 @@ export async function selectBestEconomicCandidate(env) {
 
   const caseId = winner.row.public_case_id;
   const now = new Date().toISOString();
+  const selectionTier = fullWinner ? 'SUCCESS_FEE' : 'CASE_CHECK_49';
+  const recommendation = fullWinner ? 'APPROVE OUTREACH' : 'OFFER CASE CHECK';
+  const selectionReason = fullWinner ? 'ECONOMIC_WINNER_SELECTED' : 'ECONOMIC_CASE_CHECK_SELECTED';
   if (active?.public_case_id === caseId) {
     await env.CASE_DB.prepare(`
-      UPDATE cases SET case_value_score = ?2, recommendation = 'APPROVE OUTREACH', version = version + 1, updated_at = ?3
+      UPDATE cases SET case_value_score = ?2, recommendation = ?3, version = version + 1, updated_at = ?4
       WHERE public_case_id = ?1 AND status = 'PENDING_APPROVAL'
-    `).bind(caseId, winner.score.economicScore, now).run();
+    `).bind(caseId, winner.score.economicScore, recommendation, now).run();
     await persistScore(env, caseId, winner.score, now);
-    return { selectedCaseId: caseId, changed: false, reason: 'WINNER_ALREADY_ACTIVE', score: winner.score };
+    return { selectedCaseId: caseId, changed: false, reason: 'WINNER_ALREADY_ACTIVE', selectionTier, score: winner.score };
   }
 
   const message = outreachMessage();
@@ -364,7 +387,7 @@ export async function selectBestEconomicCandidate(env) {
         public_case_id, case_value_score, outreach_ready, impact_class,
         evidence_quality, recommendation, outreach_message, status,
         version, is_active, updated_at
-      ) VALUES (?1, ?2, 1, ?3, ?4, 'APPROVE OUTREACH', ?5, 'PENDING_APPROVAL', 1, 1, ?6)
+      ) VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, 'PENDING_APPROVAL', 1, 1, ?7)
       ON CONFLICT(public_case_id) DO UPDATE SET
         case_value_score = excluded.case_value_score,
         outreach_ready = 1,
@@ -381,6 +404,7 @@ export async function selectBestEconomicCandidate(env) {
       winner.score.economicScore,
       winner.row.impact_score >= 82 ? 'KRITISCH' : winner.row.impact_score >= 68 ? 'HOCH' : winner.row.impact_score >= 52 ? 'MITTEL' : 'NIEDRIG',
       winner.row.evidence_score >= 78 ? 'STARK' : winner.row.evidence_score >= 58 ? 'SOLIDE' : winner.row.evidence_score >= 40 ? 'TEILWEISE' : 'SCHWACH',
+      recommendation,
       message,
       now
     ),
@@ -396,19 +420,19 @@ export async function selectBestEconomicCandidate(env) {
       caseId,
       winner.row.contact_email,
       winner.row.author_name || winner.row.author_login || null,
-      'Regarding your public platform/billing report',
+      fullWinner ? 'Regarding your public platform/billing report' : 'Platform/Billing Case Check for your public report',
       now
     ),
     env.CASE_DB.prepare(`UPDATE radar_candidates SET status = 'PROMOTED', promoted_at = ?2 WHERE public_case_id = ?1`).bind(caseId, now),
     env.CASE_DB.prepare(`
       INSERT INTO state_events (public_case_id, event_type, state, source, created_at)
-      VALUES (?1, 'ECONOMIC_WINNER_SELECTED', 'PENDING_APPROVAL', 'ECONOMIC_SELECTOR_V1', ?2)
-    `).bind(caseId, now)
+      VALUES (?1, ?2, 'PENDING_APPROVAL', 'ECONOMIC_SELECTOR_V1', ?3)
+    `).bind(caseId, selectionReason, now)
   );
 
   await env.CASE_DB.batch(statements);
   await persistScore(env, caseId, winner.score, now);
-  return { selectedCaseId: caseId, changed: true, reason: 'ECONOMIC_WINNER_SELECTED', score: winner.score, evaluated: scored.length };
+  return { selectedCaseId: caseId, changed: true, reason: selectionReason, selectionTier, score: winner.score, evaluated: scored.length };
 }
 
 export async function economicSelectionStatus(env) {

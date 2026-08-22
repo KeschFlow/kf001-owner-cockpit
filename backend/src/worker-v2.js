@@ -3,6 +3,7 @@ import { verifyOwnerAssertion } from './webauthn.js';
 import { privateCaseDetail, radarStatus, runRadarScan } from './radar.js';
 import { handleRadarIntakeRequest } from './radar-intake.js';
 import {
+  caseCheckEligible,
   economicSelectionStatus,
   ensureEconomicSelectionSchema,
   selectBestEconomicCandidate
@@ -91,6 +92,20 @@ function economicRowIsApprovalQualified(row) {
     && Boolean(row.selected_at);
 }
 
+function economicRowIsSelectedRevenueCandidate(row, env) {
+  if (economicRowIsApprovalQualified(row)) return true;
+  if (!row || String(row.scoring_version || '') !== ECONOMIC_SCORING_VERSION || !row.selected_at) return false;
+  return caseCheckEligible({
+    economicScore: Number(row.economic_score || 0),
+    amountApproxUsd: Number(row.amount_approx_usd || 0),
+    solvability: Number(row.solvability_score || 0),
+    reachability: Number(row.reachability_score || 0),
+    evidence: Number(row.evidence_score || 0),
+    effort: Number(row.effort_score || 0),
+    uncertainty: Number(row.uncertainty_score || 0)
+  }, env);
+}
+
 async function economicApprovalQualification(env, caseId) {
   const row = await env.CASE_DB.prepare(`
     SELECT public_case_id, economic_score, economically_qualified, scoring_version, selected_at,
@@ -109,7 +124,9 @@ async function economicApprovalQualification(env, caseId) {
 async function suppressInvalidPendingGate(env) {
   const active = await env.CASE_DB.prepare(`
     SELECT c.public_case_id,
-           e.economic_score, e.economically_qualified, e.scoring_version, e.selected_at
+           e.economic_score, e.economically_qualified, e.scoring_version, e.selected_at,
+           e.solvability_score, e.reachability_score, e.evidence_score,
+           e.effort_score, e.uncertainty_score, e.amount_approx_usd
       FROM cases c
       LEFT JOIN case_economic_scores e ON e.public_case_id = c.public_case_id
      WHERE c.is_active = 1
@@ -117,7 +134,7 @@ async function suppressInvalidPendingGate(env) {
      ORDER BY c.updated_at DESC
      LIMIT 1
   `).first();
-  if (!active?.public_case_id || economicRowIsApprovalQualified(active)) return false;
+  if (!active?.public_case_id || economicRowIsSelectedRevenueCandidate(active, env)) return false;
 
   const now = new Date().toISOString();
   await env.CASE_DB.batch([
@@ -174,7 +191,7 @@ async function executeRadarAndEconomicSelection(env) {
   const radarResult = await runRadarScan(env);
   const economicResult = await selectBestEconomicCandidate(env);
   const suppressedInvalidGate = await suppressInvalidPendingGate(env);
-  const selectedCaseId = !suppressedInvalidGate && economicResult?.score?.economicallyQualified
+  const selectedCaseId = !suppressedInvalidGate && economicResult?.selectedCaseId
     ? (economicResult.selectedCaseId || null)
     : null;
   return {
