@@ -379,6 +379,45 @@ async function upsertCandidate(env, candidate) {
   ).run();
 }
 
+export async function ingestVerifiedRadarCandidate(env, input) {
+  await ensureRadarSchema(env);
+
+  const source = clean(input.source, 12).toUpperCase();
+  const externalId = clean(input.externalId, 180);
+  const title = clean(input.title, 300);
+  const targetEntity = clean(input.targetEntity, 160);
+  const excerpt = clean(`${targetEntity ? `Target entity: ${targetEntity}. ` : ''}${input.rawDescription}`, 6000);
+  const claimAmountUsd = Number(input.claimAmountUsd || 0);
+  const caseId = await publicCaseId(source, externalId);
+  const existing = await env.CASE_DB.prepare(`
+    SELECT public_case_id, status FROM radar_candidates
+    WHERE source = ?1 AND external_id = ?2
+  `).bind(source, externalId).first();
+
+  const scoringText = `${excerpt}\nVerified claim amount: USD ${claimAmountUsd.toFixed(2)}`;
+  const scores = scoreCandidate(title, scoringText);
+  scores.amountSignal = claimAmountUsd;
+
+  const candidate = {
+    source,
+    externalId,
+    caseId,
+    url: clean(input.sourceUrl, 1200),
+    title,
+    excerpt,
+    authorLogin: clean(input.authorLogin, 80) || null,
+    authorName: clean(input.authorName, 120) || null,
+    contactEmail: clean(input.contactEmail, 254) || null,
+    contactRoute: clean(input.contactRoute, 80) || null,
+    publishedAt: input.publishedAt || null,
+    duplicate: Boolean(existing),
+    ...scores
+  };
+
+  await upsertCandidate(env, candidate);
+  return candidate;
+}
+
 async function activeCaseAllowsPromotion(env) {
   const row = await env.CASE_DB.prepare(`
     SELECT status FROM cases WHERE is_active = 1 ORDER BY updated_at DESC LIMIT 1

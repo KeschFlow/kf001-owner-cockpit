@@ -628,7 +628,7 @@ function autoContactAllowed(row) {
   const email = String(row?.recipient_email || '').trim();
   if (!email) return false;
   if (ROLE_EMAIL.test(email)) return true;
-  return ['PUBLIC_WEBSITE_BUSINESS_EMAIL', 'PUBLIC_WEBSITE_MAILTO', 'GITHUB_PUBLIC_EMAIL', 'GITLAB_PUBLIC_EMAIL', 'PUBLIC_POST_EMAIL']
+  return ['PUBLIC_WEBSITE_BUSINESS_EMAIL', 'PUBLIC_WEBSITE_MAILTO', 'PUBLIC_APP_SUPPORT_EMAIL', 'VERIFIED_PUBLIC_EMAIL', 'GITHUB_PUBLIC_EMAIL', 'GITLAB_PUBLIC_EMAIL', 'PUBLIC_POST_EMAIL']
     .includes(String(row?.contact_route || ''));
 }
 
