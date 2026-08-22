@@ -1,6 +1,7 @@
 import baseWorker from './worker.js';
 import { verifyOwnerAssertion } from './webauthn.js';
 import { privateCaseDetail, radarStatus, runRadarScan } from './radar.js';
+import { handleRadarIntakeRequest } from './radar-intake.js';
 import {
   economicSelectionStatus,
   ensureEconomicSelectionSchema,
@@ -299,6 +300,10 @@ export default {
 
     if (request.method === 'POST' && url.pathname === '/v1/radar/run') {
       return handleOwnerRadarRun(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/radar/intake') {
+      return handleRadarIntakeRequest(request, env);
     }
 
     if (request.method === 'POST' && url.pathname === '/v1/private/case-detail') {

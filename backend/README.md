@@ -30,3 +30,9 @@ Die Radar-API akzeptiert ausschließlich eine enge Liste öffentlicher, anonymis
 5. `npx wrangler deploy`
 
 Das Secret wird ausschließlich in Cloudflare gespeichert und niemals committed. Die verwendeten Worker- und D1-Ressourcen bleiben im kostenlosen Cloudflare-Tarif; ein Upgrade ist nicht Teil dieses Deployments.
+
+## Verified external radar intake
+
+`POST /v1/radar/intake` übernimmt extern verifizierte öffentliche Kandidaten in die vorhandene Tabelle `radar_candidates`. Der Endpoint nutzt das bestehende `RADAR_INGEST_TOKEN`, die vorhandene Radar-Bewertung und unmittelbar danach den bestehenden `ECON_V1` Economic Selector. Es gibt weder eine zweite Bewertungslogik noch eine neue Datenbank.
+
+Erforderlich sind `externalId`, `platform`, `sourceUrl`, `title`, `rawDescription`, `claimAmountUsd`, `contactEmail` und ein verifizierter öffentlicher `contactRoute`. Unterstützt werden `reddit`, `github`, `gitlab`, `google_ai_forum`, `cloudflare_forum` und `verified_manual`. Vom Aufrufer mitgesendete Score-Felder werden nicht übernommen; die Bewertung entsteht ausschließlich serverseitig.

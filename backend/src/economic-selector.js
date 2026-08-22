@@ -101,6 +101,8 @@ export function scoreEconomicCandidate(row) {
 
   const reachabilityByRoute = {
     PUBLIC_WEBSITE_MAILTO: 88,
+    PUBLIC_APP_SUPPORT_EMAIL: 88,
+    VERIFIED_PUBLIC_EMAIL: 86,
     PUBLIC_POST_EMAIL: 82,
     GITHUB_PUBLIC_EMAIL: 72,
     GITLAB_PUBLIC_EMAIL: 72
@@ -299,7 +301,7 @@ export async function selectBestEconomicCandidate(env) {
   }
 
   const rows = await env.CASE_DB.prepare(`
-    SELECT r.*
+    SELECT r.*, c.public_case_id AS existing_case_id
     FROM radar_candidates r
     LEFT JOIN cases c ON c.public_case_id = r.public_case_id
     WHERE r.contact_email IS NOT NULL
@@ -311,7 +313,7 @@ export async function selectBestEconomicCandidate(env) {
   for (const row of rows.results || []) {
     const score = scoreEconomicCandidate(row);
     scored.push({ row, score });
-    await persistScore(env, row.public_case_id, score);
+    if (row.existing_case_id) await persistScore(env, row.public_case_id, score);
   }
 
   scored.sort((a, b) =>
