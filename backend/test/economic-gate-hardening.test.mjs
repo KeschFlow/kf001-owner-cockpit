@@ -25,3 +25,9 @@ test('stale or uneconomic pending gates are suppressed before owner-state is ser
   assert.match(workerV2, /url\.pathname === '\/v1\/owner-state'/);
   assert.match(workerV2, /await suppressInvalidPendingGate\(env\)/);
 });
+
+test('selected case-check candidates stay active for the existing revenue autopilot but not owner APPROVE', () => {
+  assert.match(workerV2, /economicRowIsSelectedRevenueCandidate\(active, env\)/);
+  assert.match(workerV2, /caseCheckEligible/);
+  assert.match(workerV2, /allowed:\s*economicRowIsApprovalQualified\(row\)/);
+});

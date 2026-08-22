@@ -27,6 +27,18 @@ const NOT_QUALIFIED = Object.freeze({
   contactRoute: 'VERIFIED_PUBLIC_EMAIL'
 });
 
+const CASE_CHECK = Object.freeze({
+  externalId: 'EXT-CASE-CHECK-001',
+  platform: 'github',
+  sourceUrl: 'https://github.com/example/project/issues/42',
+  title: 'Business account reports unresolved platform auto-charge discrepancy',
+  rawDescription: 'A company developer documents USD 860 in disputed unexpected platform charges and an unexplained account balance. The public report includes invoices, screenshots, transaction dates, billing records, a support case ID and a detailed support timeline. The chronology starts on 2026-07-14, links the public supporting record at https://example.com/public-billing-record, and records each response supplied to billing support. The company requested a refund and supplied the requested records, but the issue remains unresolved after repeated billing support contact with no response. The business account owner requests a clear escalation route and identifies the account, invoice and affected payment period.',
+  claimAmountUsd: 860,
+  authorName: 'Business Account Owner',
+  contactEmail: 'billing@company.example',
+  contactRoute: 'PUBLIC_POST_EMAIL'
+});
+
 function normalize(sql) {
   return String(sql).replace(/\s+/g, ' ').trim();
 }
@@ -98,9 +110,9 @@ class MemoryD1 {
       const previous = this.cases.get(args[0]);
       this.cases.set(args[0], {
         public_case_id: args[0], case_value_score: args[1], outreach_ready: 1,
-        impact_class: args[2], evidence_quality: args[3], recommendation: 'APPROVE OUTREACH',
-        outreach_message: args[4], status: 'PENDING_APPROVAL', version: (previous?.version || 0) + 1,
-        is_active: 1, updated_at: args[5]
+        impact_class: args[2], evidence_quality: args[3], recommendation: args[4],
+        outreach_message: args[5], status: 'PENDING_APPROVAL', version: (previous?.version || 0) + 1,
+        is_active: 1, updated_at: args[6]
       });
       return { meta: { changes: 1 } };
     }
@@ -117,7 +129,7 @@ class MemoryD1 {
 
     if (statement.startsWith('UPDATE cases SET case_value_score')) {
       const row = this.cases.get(args[0]);
-      if (row?.status === 'PENDING_APPROVAL') Object.assign(row, { case_value_score: args[1], version: row.version + 1, updated_at: args[2] });
+      if (row?.status === 'PENDING_APPROVAL') Object.assign(row, { case_value_score: args[1], recommendation: args[2], version: row.version + 1, updated_at: args[3] });
       return { meta: { changes: row ? 1 : 0 } };
     }
 
@@ -245,6 +257,24 @@ test('non-qualified intake remains discovered and is not promoted to Owner Gate'
   assert.equal(body.economicSelection.reason, 'NO_ECONOMICALLY_QUALIFIED_CASE');
   assert.equal(db.cases.size, 0);
   assert.equal([...db.candidates.values()][0].status, 'DISCOVERED');
+});
+
+test('documented smaller case reaches the existing CASE CHECK tier without becoming success-fee qualified', async () => {
+  const db = new MemoryD1();
+  const env = {
+    RADAR_INGEST_TOKEN: 'UNIT_TEST_ONLY', CASE_DB: db,
+    CASE_CHECK_ENABLED: 'true', CASE_CHECK_MIN_ECONOMIC_SCORE: '58', CASE_CHECK_MIN_VALUE_USD: '500'
+  };
+  const response = await handleRadarIntakeRequest(request(CASE_CHECK), env);
+  const body = await response.json();
+
+  assert.equal(response.status, 201);
+  assert.equal(body.economicEvaluation.economicallyQualified, false);
+  assert.equal(body.economicSelection.reason, 'ECONOMIC_CASE_CHECK_SELECTED');
+  assert.equal(body.economicSelection.selectionTier, 'CASE_CHECK_49');
+  assert.equal(db.cases.get(body.intake.publicCaseId)?.status, 'PENDING_APPROVAL');
+  assert.equal(db.cases.get(body.intake.publicCaseId)?.recommendation, 'OFFER CASE CHECK');
+  assert.equal(db.scores.get(body.intake.publicCaseId)?.selected_at !== null, true);
 });
 
 test('production worker v3 exposes the protected intake route', async () => {

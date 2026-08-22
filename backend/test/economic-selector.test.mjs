@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extractEconomicAmount, scoreEconomicCandidate } from '../src/economic-selector.js';
+import { caseCheckEligible, extractEconomicAmount, scoreEconomicCandidate } from '../src/economic-selector.js';
 
 test('extractEconomicAmount recognizes SEK and normalizes it conservatively for ranking', () => {
   const amount = extractEconomicAmount('Unauthorized Gemini usage exceeded SEK 200,000 and 47,836 SEK left the bank account.');
@@ -70,4 +70,22 @@ test('economic score rewards acknowledged recoverability over raw damage alone',
   assert.ok(acknowledged.economicScore > spectacular.economicScore);
   assert.equal(acknowledged.economicallyQualified, true);
   assert.equal(spectacular.economicallyQualified, false);
+});
+
+test('existing case-check thresholds accept a smaller documented case without calling it success-fee qualified', () => {
+  const score = scoreEconomicCandidate({
+    source_title: 'Business account has unresolved platform auto-charge discrepancy',
+    source_excerpt: 'A company developer documents USD 860 in disputed auto-charges and an unexplained balance. The public report includes invoices, screenshots, transaction dates, a support case and a timeline, and remains unresolved after billing support contact.',
+    contact_email: 'billing@company.example',
+    contact_route: 'PUBLIC_POST_EMAIL',
+    author_name: 'Business account owner',
+    evidence_score: 75,
+    impact_score: 80,
+    amount_signal: 860
+  });
+
+  const env = { CASE_CHECK_ENABLED: 'true', CASE_CHECK_MIN_ECONOMIC_SCORE: '58', CASE_CHECK_MIN_VALUE_USD: '500' };
+  assert.equal(score.economicallyQualified, false);
+  assert.equal(caseCheckEligible(score, env), true);
+  assert.equal(caseCheckEligible(score, { ...env, CASE_CHECK_ENABLED: 'false' }), false);
 });
