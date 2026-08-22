@@ -11,8 +11,9 @@ import {
 const DEFAULT_MIN_SCORE = 72;
 const DEFAULT_MIN_VALUE_USD = 8000;
 const LOCK_SECONDS = 180;
+const MAX_OPEN_CASES_PER_RUN = 25;
 
-const OPEN_STAGES = new Set([
+const OPEN_STAGE_LIST = Object.freeze([
   'CONTACT_CLAIMED',
   'OUTREACH_SENT',
   'TERMS_SENT',
@@ -28,6 +29,7 @@ const OPEN_STAGES = new Set([
   ,'CASE_CHECK_PAYMENT_PENDING'
   ,'CASE_CHECK_PAID_AWAITING_EVIDENCE'
 ]);
+const OPEN_STAGES = new Set(OPEN_STAGE_LIST);
 
 const CLOSED_STAGES = new Set([
   'CLOSED_NOT_INTERESTED',
@@ -554,13 +556,22 @@ async function releaseLock(env, token) {
   `).bind(token, nowIso()).run();
 }
 
-async function openAutopilotCase(env) {
+async function openAutopilotCases(env, limit = MAX_OPEN_CASES_PER_RUN) {
+  const boundedLimit = Math.max(1, Math.min(MAX_OPEN_CASES_PER_RUN, Math.floor(Number(limit) || MAX_OPEN_CASES_PER_RUN)));
+  const placeholders = OPEN_STAGE_LIST.map((_, index) => `?${index + 1}`).join(', ');
   const row = await env.CASE_DB.prepare(`
     SELECT * FROM revenue_autopilot
-    ORDER BY updated_at DESC
-    LIMIT 20
-  `).all();
-  return (row.results || []).find((item) => OPEN_STAGES.has(String(item.stage))) || null;
+    WHERE stage IN (${placeholders})
+    ORDER BY updated_at ASC, public_case_id ASC
+    LIMIT ?${OPEN_STAGE_LIST.length + 1}
+  `).bind(...OPEN_STAGE_LIST, boundedLimit).all();
+  const seen = new Set();
+  return (row.results || []).filter((item) => {
+    const caseId = String(item.public_case_id || '');
+    if (!caseId || seen.has(caseId) || !OPEN_STAGES.has(String(item.stage))) return false;
+    seen.add(caseId);
+    return true;
+  });
 }
 
 async function currentWinner(env) {
@@ -645,6 +656,16 @@ async function claimDailyQuota(env) {
      WHERE quota_day = ?1 AND sent_count < ?2
   `).bind(day, max, nowIso()).run();
   return Number(result.meta?.changes || 0) === 1;
+}
+
+async function dailyQuotaStatus(env) {
+  const max = Math.max(1, Math.floor(numericEnv(env, 'AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY', 1)));
+  const day = nowIso().slice(0, 10);
+  const row = await env.CASE_DB.prepare(`
+    SELECT sent_count FROM revenue_autopilot_quota WHERE quota_day = ?1
+  `).bind(day).first();
+  const sentCount = Math.max(0, Number(row?.sent_count || 0));
+  return { day, max, sentCount, available: sentCount < max };
 }
 
 async function sendInitialOutreach(env, row) {
@@ -932,16 +953,77 @@ async function monitorOpenCase(env, record) {
   return { ok: true, action: 'WAITING_FOR_REPLY', caseId: record.public_case_id, stage: record.stage };
 }
 
+async function monitorOpenCases(env, records, monitor = monitorOpenCase) {
+  const results = [];
+  const seen = new Set();
+  for (const record of records) {
+    const caseId = String(record?.public_case_id || '');
+    if (!caseId || seen.has(caseId)) continue;
+    seen.add(caseId);
+    try {
+      results.push(await monitor(env, record));
+    } catch (error) {
+      results.push({
+        ok: false,
+        reason: clean(error?.message || 'OPEN_CASE_MONITOR_FAILED', 120),
+        caseId
+      });
+    }
+  }
+  return {
+    mode: 'MULTI_CASE',
+    attempted: results.length,
+    succeeded: results.filter((result) => result?.ok).length,
+    failed: results.filter((result) => !result?.ok).length,
+    results
+  };
+}
+
+async function acquireDailyCandidate(env, operations = {}) {
+  const quotaStatus = operations.dailyQuotaStatus || dailyQuotaStatus;
+  const selectWinner = operations.currentWinner || currentWinner;
+  const sendWinner = operations.sendInitialOutreach || sendInitialOutreach;
+  const selectCaseCheck = operations.currentCaseCheckCandidate || currentCaseCheckCandidate;
+  const sendCaseCheck = operations.sendCaseCheckOffer || sendCaseCheckOffer;
+
+  const quota = await quotaStatus(env);
+  if (!quota.available) return { ok: true, action: 'DAILY_OUTREACH_CAP_REACHED', quota };
+
+  const winner = await selectWinner(env);
+  if (winner) return { ...(await sendWinner(env, winner)), quota };
+
+  const caseCheckCandidate = await selectCaseCheck(env);
+  if (caseCheckCandidate) return { ...(await sendCaseCheck(env, caseCheckCandidate)), quota };
+
+  return { ok: true, action: 'NO_WINNER', quota };
+}
+
+async function runAutopilotCycle(env, operations = {}) {
+  const loadOpenCases = operations.openAutopilotCases || openAutopilotCases;
+  const monitorCase = operations.monitorOpenCase || monitorOpenCase;
+  const openCases = await loadOpenCases(env, MAX_OPEN_CASES_PER_RUN);
+  const monitoring = await monitorOpenCases(env, openCases, monitorCase);
+  const acquisition = await acquireDailyCandidate(env, operations);
+  return {
+    ok: monitoring.failed === 0 && acquisition.ok !== false,
+    enabled: true,
+    action: acquisition.action,
+    monitoring,
+    acquisition
+  };
+}
+
 export async function revenueAutopilotStatus(env) {
   await ensureRevenueAutopilotSchema(env);
-  const current = await openAutopilotCase(env);
+  const openCases = await openAutopilotCases(env);
+  const current = openCases[0] || null;
   const latest = current || await env.CASE_DB.prepare(`
     SELECT * FROM revenue_autopilot ORDER BY updated_at DESC LIMIT 1
   `).first();
   const pricing = successFeeConfig(env);
-  return latest ? {
+  const quota = await dailyQuotaStatus(env);
+  const common = {
     enabled: enabled(env),
-    stage: latest.stage,
     pricingModel: 'DYNAMIC_SUCCESS_FEE',
     feePercent: pricing.feePercent,
     feeMinEur: pricing.feeMinEur,
@@ -949,19 +1031,17 @@ export async function revenueAutopilotStatus(env) {
     stripeCheckoutReady: stripeCheckoutConfigured(env),
     caseCheckEnabled: caseCheckEnabled(env),
     caseCheckPriceEur: numericEnv(env, 'CASE_CHECK_PRICE_EUR', 49),
-    paymentStatus: latest.payment_status || null
-  } : {
-    enabled: enabled(env),
-    stage: 'IDLE',
-    pricingModel: 'DYNAMIC_SUCCESS_FEE',
-    feePercent: pricing.feePercent,
-    feeMinEur: pricing.feeMinEur,
-    feeMaxEur: pricing.feeMaxEur,
-    stripeCheckoutReady: stripeCheckoutConfigured(env),
-    caseCheckEnabled: caseCheckEnabled(env),
-    caseCheckPriceEur: numericEnv(env, 'CASE_CHECK_PRICE_EUR', 49),
-    paymentStatus: null
+    openCaseMonitoring: 'MULTI_CASE',
+    openCaseBlocksNewLead: false,
+    openCaseCount: openCases.length,
+    maxOpenCasesPerRun: MAX_OPEN_CASES_PER_RUN,
+    dailyNewOutreachCap: quota.max,
+    dailyNewOutreachSent: quota.sentCount,
+    newOutreachAllowedToday: quota.available
   };
+  return latest
+    ? { ...common, stage: latest.stage, paymentStatus: latest.payment_status || null }
+    : { ...common, stage: 'IDLE', paymentStatus: null };
 }
 
 export async function runRevenueAutopilot(env) {
@@ -971,14 +1051,7 @@ export async function runRevenueAutopilot(env) {
   const token = await acquireLock(env);
   if (!token) return { ok: true, enabled: true, action: 'BUSY' };
   try {
-    const open = await openAutopilotCase(env);
-    if (open) return await monitorOpenCase(env, open);
-
-    const winner = await currentWinner(env);
-    if (winner) return await sendInitialOutreach(env, winner);
-    const caseCheckCandidate = await currentCaseCheckCandidate(env);
-    if (caseCheckCandidate) return await sendCaseCheckOffer(env, caseCheckCandidate);
-    return { ok: true, enabled: true, action: 'NO_WINNER' };
+    return await runAutopilotCycle(env);
   } finally {
     await releaseLock(env, token).catch(() => {});
   }
@@ -993,5 +1066,11 @@ export const REVENUE_AUTOPILOT_INTERNALS = Object.freeze({
   paymentMessage,
   requestDynamicPayment
   ,caseCheckMessage,
-  currentCaseCheckCandidate
+  currentCaseCheckCandidate,
+  openAutopilotCases,
+  dailyQuotaStatus,
+  monitorOpenCases,
+  acquireDailyCandidate,
+  runAutopilotCycle,
+  MAX_OPEN_CASES_PER_RUN
 });

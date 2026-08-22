@@ -265,7 +265,7 @@ test('an uncertain post-Stripe persistence result never creates a second Checkou
 });
 
 test('public status contains only safe pricing and stage fields', async () => {
-  const row = { stage: 'PAYMENT_PENDING', payment_status: 'REQUESTED' };
+  const row = { public_case_id: 'PUB-TEST-STATUS', stage: 'PAYMENT_PENDING', payment_status: 'REQUESTED' };
   const db = {
     prepare(sql) {
       return {
@@ -288,6 +288,13 @@ test('public status contains only safe pricing and stage fields', async () => {
     stripeCheckoutReady: true,
     caseCheckEnabled: false,
     caseCheckPriceEur: 49,
+    openCaseMonitoring: 'MULTI_CASE',
+    openCaseBlocksNewLead: false,
+    openCaseCount: 1,
+    maxOpenCasesPerRun: 25,
+    dailyNewOutreachCap: 1,
+    dailyNewOutreachSent: 0,
+    newOutreachAllowedToday: true,
     paymentStatus: 'REQUESTED'
   });
 });
