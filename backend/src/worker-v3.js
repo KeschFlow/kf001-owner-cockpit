@@ -1,7 +1,8 @@
 import baseWorker from './worker-v2.js';
 import { enrichQualifiedContacts } from './contact-enrichment.js';
 import { selectBestEconomicCandidate } from './economic-selector.js';
-import { revenueAutopilotStatus, runRevenueAutopilot } from './revenue-autopilot.js';
+import { gmailReadAvailable } from './gmail.js';
+import { REVENUE_AUTOPILOT_INTERNALS, revenueAutopilotStatus, runRevenueAutopilot } from './revenue-autopilot.js';
 
 const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), {
   status,
@@ -187,13 +188,47 @@ export async function handleStripeWebhook(request, env) {
   return json({ ok: true, received: true, paymentStatus: 'PAID' });
 }
 
+async function normalizePaymentWaitStates(env) {
+  if (!env.CASE_DB) return { repaired: 0 };
+  const result = await env.CASE_DB.prepare(`
+    UPDATE revenue_autopilot
+       SET stage = CASE
+         WHEN offer_type = 'CASE_CHECK_49' THEN 'CASE_CHECK_PAYMENT_PENDING'
+         ELSE 'PAYMENT_PENDING'
+       END,
+       error_code = NULL,
+       updated_at = ?1
+     WHERE stage = 'REPLY_MONITOR_BLOCKED'
+       AND payment_status = 'REQUESTED'
+       AND stripe_checkout_session_id IS NOT NULL
+  `).bind(new Date().toISOString()).run();
+  return { repaired: Number(result.meta?.changes || 0) };
+}
+
+async function runDirectRevenueFallback(env) {
+  const normalizedPayments = await normalizePaymentWaitStates(env);
+  const acquisition = await REVENUE_AUTOPILOT_INTERNALS.acquireDailyCandidate(env, {
+    currentWinner: async () => null
+  });
+  return {
+    ...acquisition,
+    enabled: true,
+    mode: 'DIRECT_CASE_CHECK_FALLBACK',
+    replyProcessingAvailable: false,
+    normalizedPayments
+  };
+}
+
 // A sidecar failure must never break the proven radar or owner-gate response.
 async function runAutonomySidecar(env) {
   try {
     const contactEnrichment = await enrichQualifiedContacts(env);
     const economicSelection = await selectBestEconomicCandidate(env);
-    const revenueAutopilot = await runRevenueAutopilot(env);
-    return { ok: true, contactEnrichment, economicSelection, revenueAutopilot };
+    const replyProcessingAvailable = await gmailReadAvailable(env);
+    const revenueAutopilot = replyProcessingAvailable
+      ? await runRevenueAutopilot(env)
+      : await runDirectRevenueFallback(env);
+    return { ok: true, contactEnrichment, economicSelection, replyProcessingAvailable, revenueAutopilot };
   } catch (error) {
     return { ok: false, error: String(error?.message || 'AUTONOMY_SIDECAR_FAILED') };
   }
@@ -209,7 +244,13 @@ export default {
 
     if (request.method === 'GET' && url.pathname === '/v1/autopilot/status') {
       try {
-        return json(await revenueAutopilotStatus(env));
+        const status = await revenueAutopilotStatus(env);
+        const replyProcessingAvailable = await gmailReadAvailable(env);
+        return json({
+          ...status,
+          replyProcessingAvailable,
+          revenueMode: replyProcessingAvailable ? 'FULL' : 'DIRECT_CASE_CHECK_FALLBACK'
+        });
       } catch (error) {
         return json({ enabled: false, stage: 'ERROR', error: String(error?.message || 'AUTOPILOT_STATUS_FAILED') }, 503);
       }
@@ -235,3 +276,5 @@ export default {
     })());
   }
 };
+
+export const WORKER_V3_INTERNALS = Object.freeze({ normalizePaymentWaitStates, runDirectRevenueFallback });
