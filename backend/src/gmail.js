@@ -89,6 +89,27 @@ export async function sendGmail(env, { to, subject, text }) {
   return sendRawGmail(env, { raw: message });
 }
 
+export async function gmailReadAvailable(env) {
+  if (!gmailConfigured(env)) return false;
+  let token;
+  try {
+    token = await accessToken(env);
+  } catch {
+    return false;
+  }
+  try {
+    const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json'
+      }
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function getGmailThread(env, threadId) {
   if (!threadId) throw new Error('GMAIL_THREAD_ID_MISSING');
   const token = await accessToken(env);
