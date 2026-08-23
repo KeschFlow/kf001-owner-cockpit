@@ -1,0 +1,1 @@
+Temporary branch helper: GitHub Actions applies the tested Gmail-read revenue fallback patch and commits the resulting production/test files. Remove this helper file and the patch workflow after the production files are merged if desired.
