@@ -113,7 +113,11 @@ export async function handleStripeWebhook(request, env) {
   `).bind(publicCaseId).first();
   const isCaseCheck = String(session.metadata?.product_type || '') === 'CASE_CHECK_49';
   const expectedStage = isCaseCheck ? 'CASE_CHECK_PAYMENT_PENDING' : 'PAYMENT_PENDING';
-  if (!record || record.stage !== expectedStage) return rejectStripeEvent(env, eventId, 'OPEN_PAYMENT_RECORD_NOT_FOUND');
+  const paymentRecordOpen = Boolean(record) && (
+    record.stage === expectedStage
+    || (record.stage === 'REPLY_MONITOR_BLOCKED' && record.payment_status === 'REQUESTED')
+  );
+  if (!paymentRecordOpen) return rejectStripeEvent(env, eventId, 'OPEN_PAYMENT_RECORD_NOT_FOUND');
   if (isCaseCheck !== (record.offer_type === 'CASE_CHECK_49')) return rejectStripeEvent(env, eventId, 'PAYMENT_PRODUCT_MISMATCH');
   if (String(record.stripe_checkout_session_id || '') !== sessionId) return rejectStripeEvent(env, eventId, 'STRIPE_SESSION_MISMATCH');
 
@@ -141,7 +145,8 @@ export async function handleStripeWebhook(request, env) {
          SET stage = ?7, payment_status = 'PAID', payment_confirmed_at = ?2,
              stripe_payment_intent_id = ?3, stripe_payment_event_id = ?4,
              error_code = NULL, updated_at = ?2
-       WHERE public_case_id = ?1 AND stage = ?8
+       WHERE public_case_id = ?1
+         AND (stage = ?8 OR (stage = 'REPLY_MONITOR_BLOCKED' AND payment_status = 'REQUESTED'))
          AND stripe_checkout_session_id = ?5
          AND COALESCE(fixed_offer_amount_cents, calculated_fee_minor, success_fee_amount_cents) = ?6
     `).bind(publicCaseId, paidAt, paymentIntentId, eventId, sessionId, expectedAmount,
