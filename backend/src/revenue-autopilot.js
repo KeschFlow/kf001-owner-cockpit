@@ -904,6 +904,36 @@ async function handleInbound(env, record, message) {
 }
 
 async function monitorOpenCase(env, record) {
+  // Payment collection is webhook-driven and must never depend on Gmail read scope.
+  // Recover a case-check checkout that an older worker incorrectly moved to REPLY_MONITOR_BLOCKED.
+  const isCaseCheckPayment = String(record.offer_type || '') === 'CASE_CHECK_49'
+    && String(record.payment_status || '') === 'REQUESTED'
+    && Boolean(record.stripe_checkout_session_id);
+  if (isCaseCheckPayment && String(record.stage) === 'REPLY_MONITOR_BLOCKED') {
+    await env.CASE_DB.prepare(`
+      UPDATE revenue_autopilot
+         SET stage = 'CASE_CHECK_PAYMENT_PENDING', error_code = NULL, updated_at = ?2
+       WHERE public_case_id = ?1 AND stage = 'REPLY_MONITOR_BLOCKED'
+    `).bind(record.public_case_id, nowIso()).run();
+    record = { ...record, stage: 'CASE_CHECK_PAYMENT_PENDING', error_code: null };
+  }
+
+  if (record.stage === 'CASE_CHECK_PAYMENT_PENDING') {
+    const expiresAt = Date.parse(record.checkout_expires_at || '');
+    if (Number.isFinite(expiresAt) && Date.now() >= expiresAt) {
+      await env.CASE_DB.prepare(`
+        UPDATE revenue_autopilot SET stage = 'CLOSED_NO_RESPONSE', updated_at = ?2
+         WHERE public_case_id = ?1 AND stage = 'CASE_CHECK_PAYMENT_PENDING'
+      `).bind(record.public_case_id, nowIso()).run();
+      return { ok: true, action: 'CASE_CHECK_EXPIRED', caseId: record.public_case_id };
+    }
+    return { ok: true, action: 'WAITING_FOR_PAYMENT', caseId: record.public_case_id, stage: record.stage };
+  }
+
+  if (record.stage === 'PAYMENT_PENDING') {
+    return { ok: true, action: 'WAITING_FOR_PAYMENT', caseId: record.public_case_id, stage: record.stage };
+  }
+
   if (!record.gmail_thread_id || !record.initial_sent_at) return { ok: false, reason: 'THREAD_NOT_READY' };
   let thread;
   try {
@@ -912,9 +942,15 @@ async function monitorOpenCase(env, record) {
     const code = clean(error.message || 'GMAIL_THREAD_FAILED', 120);
     await env.CASE_DB.prepare(`
       UPDATE revenue_autopilot SET stage = 'REPLY_MONITOR_BLOCKED', error_code = ?2, updated_at = ?3
-      WHERE public_case_id = ?1 AND stage NOT IN ('PAYMENT_PENDING')
+      WHERE public_case_id = ?1 AND stage NOT IN ('PAYMENT_PENDING','CASE_CHECK_PAYMENT_PENDING')
     `).bind(record.public_case_id, code, nowIso()).run();
-    return { ok: false, reason: code, caseId: record.public_case_id };
+    // Missing Gmail read scope degrades reply handling but must not stop checkout revenue acquisition.
+    return {
+      ok: code === 'GMAIL_READ_SCOPE_REQUIRED',
+      action: code === 'GMAIL_READ_SCOPE_REQUIRED' ? 'REPLY_MONITOR_DEGRADED' : 'REPLY_MONITOR_FAILED',
+      reason: code,
+      caseId: record.public_case_id
+    };
   }
 
   const messages = inboundMessages(thread, record.recipient_email, record.initial_sent_at);
@@ -936,17 +972,6 @@ async function monitorOpenCase(env, record) {
         UPDATE revenue_autopilot SET stage = 'CLOSED_NO_RESPONSE', updated_at = ?2 WHERE public_case_id = ?1
       `).bind(record.public_case_id, nowIso()).run();
       return { ok: true, action: 'CLOSED_NO_RESPONSE', caseId: record.public_case_id };
-    }
-  }
-
-  if (record.stage === 'CASE_CHECK_PAYMENT_PENDING') {
-    const expiresAt = Date.parse(record.checkout_expires_at || '');
-    if (Number.isFinite(expiresAt) && Date.now() >= expiresAt) {
-      await env.CASE_DB.prepare(`
-        UPDATE revenue_autopilot SET stage = 'CLOSED_NO_RESPONSE', updated_at = ?2
-         WHERE public_case_id = ?1 AND stage = 'CASE_CHECK_PAYMENT_PENDING'
-      `).bind(record.public_case_id, nowIso()).run();
-      return { ok: true, action: 'CASE_CHECK_EXPIRED', caseId: record.public_case_id };
     }
   }
 
@@ -985,9 +1010,17 @@ async function acquireDailyCandidate(env, operations = {}) {
   const sendWinner = operations.sendInitialOutreach || sendInitialOutreach;
   const selectCaseCheck = operations.currentCaseCheckCandidate || currentCaseCheckCandidate;
   const sendCaseCheck = operations.sendCaseCheckOffer || sendCaseCheckOffer;
+  const preferCheckoutOnly = Boolean(operations.preferCheckoutOnly);
 
   const quota = await quotaStatus(env);
   if (!quota.available) return { ok: true, action: 'DAILY_OUTREACH_CAP_REACHED', quota };
+
+  // If Gmail reads are unavailable, preserve autonomous revenue by using the direct Stripe offer.
+  if (preferCheckoutOnly) {
+    const caseCheckCandidate = await selectCaseCheck(env);
+    if (caseCheckCandidate) return { ...(await sendCaseCheck(env, caseCheckCandidate)), quota, mode: 'CHECKOUT_ONLY_DEGRADED' };
+    return { ok: true, action: 'NO_CHECKOUT_CANDIDATE', quota, mode: 'CHECKOUT_ONLY_DEGRADED' };
+  }
 
   const winner = await selectWinner(env);
   if (winner) return { ...(await sendWinner(env, winner)), quota };
@@ -1003,7 +1036,8 @@ async function runAutopilotCycle(env, operations = {}) {
   const monitorCase = operations.monitorOpenCase || monitorOpenCase;
   const openCases = await loadOpenCases(env, MAX_OPEN_CASES_PER_RUN);
   const monitoring = await monitorOpenCases(env, openCases, monitorCase);
-  const acquisition = await acquireDailyCandidate(env, operations);
+  const gmailReadBlocked = monitoring.results.some((result) => result?.reason === 'GMAIL_READ_SCOPE_REQUIRED');
+  const acquisition = await acquireDailyCandidate(env, { ...operations, preferCheckoutOnly: gmailReadBlocked });
   return {
     ok: monitoring.failed === 0 && acquisition.ok !== false,
     enabled: true,

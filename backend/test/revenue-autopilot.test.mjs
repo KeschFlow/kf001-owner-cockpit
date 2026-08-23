@@ -31,7 +31,7 @@ test('open customers are monitored in a bounded set without blocking daily acqui
   assert.match(autopilot, /OPEN_STAGES/);
   assert.match(autopilot, /MAX_OPEN_CASES_PER_RUN = 25/);
   assert.match(autopilot, /const monitoring = await monitorOpenCases\(env, openCases, monitorCase\)/);
-  assert.match(autopilot, /const acquisition = await acquireDailyCandidate\(env, operations\)/);
+  assert.match(autopilot, /const acquisition = await acquireDailyCandidate\(env, \{ \.\.\.operations, preferCheckoutOnly: gmailReadBlocked \}\)/);
   assert.doesNotMatch(autopilot, /if \(open\) return await monitorOpenCase/);
   assert.match(autopilot, /CLOSED_NO_RESPONSE/);
 });
@@ -61,6 +61,36 @@ test('case-check waiting case is monitored and a new qualified winner receives t
   assert.equal(outreach, 1);
   assert.equal(result.acquisition.caseId, 'CASE-B');
   assert.equal(result.acquisition.quota.max, 1);
+});
+
+test('gmail read scope failure degrades reply monitoring without blocking acquisition', async () => {
+  let caseCheckSent = 0;
+  const result = await REVENUE_AUTOPILOT_INTERNALS.runAutopilotCycle({}, cycleOperations({
+    openCases: [{ public_case_id: 'CASE-A', stage: 'OUTREACH_SENT' }],
+    caseCheck: { public_case_id: 'CASE-B' },
+    monitor: async (_, record) => ({
+      ok: true,
+      action: 'REPLY_MONITOR_DEGRADED',
+      reason: 'GMAIL_READ_SCOPE_REQUIRED',
+      caseId: record.public_case_id
+    }),
+    sendCaseCheck: async (_, row) => {
+      caseCheckSent += 1;
+      return { ok: true, action: 'CASE_CHECK_OFFER_SENT', caseId: row.public_case_id };
+    }
+  }));
+  assert.equal(result.ok, true);
+  assert.equal(result.action, 'CASE_CHECK_OFFER_SENT');
+  assert.equal(result.acquisition.mode, 'CHECKOUT_ONLY_DEGRADED');
+  assert.equal(caseCheckSent, 1);
+});
+
+test('checkout payment stages are independent of Gmail reads', () => {
+  assert.match(autopilot, /record\.stage === 'CASE_CHECK_PAYMENT_PENDING'/);
+  assert.match(autopilot, /record\.stage === 'PAYMENT_PENDING'/);
+  assert.match(autopilot, /action: 'WAITING_FOR_PAYMENT'/);
+  assert.match(autopilot, /stage NOT IN \('PAYMENT_PENDING','CASE_CHECK_PAYMENT_PENDING'\)/);
+  assert.match(autopilot, /isCaseCheckPayment/);
 });
 
 test('two open cases with distinct inbound replies are both processed in one cycle', async () => {
