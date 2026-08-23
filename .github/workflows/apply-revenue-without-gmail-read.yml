@@ -6,6 +6,11 @@ on:
     paths:
       - 'backend/scripts/apply-revenue-without-gmail-read.mjs'
       - '.github/workflows/apply-revenue-without-gmail-read.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/scripts/apply-revenue-without-gmail-read.mjs'
+      - '.github/workflows/apply-revenue-without-gmail-read.yml'
 
 permissions:
   contents: write
