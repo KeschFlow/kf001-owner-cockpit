@@ -34,3 +34,8 @@ test('blocked requested payments are normalized back to Stripe-waiting states', 
 test('public status tells the truth about fallback mode', () => {
   assert.match(workerV3, /revenueMode: replyProcessingAvailable \? 'FULL' : 'DIRECT_CASE_CHECK_FALLBACK'/);
 });
+
+test('Stripe webhook accepts a payment record that Gmail previously marked reply-monitor-blocked', () => {
+  assert.match(workerV3, /record\.stage === 'REPLY_MONITOR_BLOCKED' && record\.payment_status === 'REQUESTED'/);
+  assert.match(workerV3, /stage = 'REPLY_MONITOR_BLOCKED' AND payment_status = 'REQUESTED'/);
+});
