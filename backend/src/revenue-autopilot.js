@@ -802,9 +802,12 @@ async function sendCaseCheckOffer(env, row) {
       VALUES (?1, 'GMAIL_AUTOPILOT', ?2, ?3, 'SENT', NULL, ?4)
     `).bind(row.public_case_id, sent.id, row.recipient_email, sentAt),
     env.CASE_DB.prepare(`
-      INSERT INTO state_events (public_case_id, event_type, state, source, created_at)
-      VALUES (?1, 'CASE_CHECK_OFFER_SENT', 'PAYMENT_PENDING', 'REVENUE_AUTOPILOT', ?2)
-    `).bind(row.public_case_id, sentAt)
+      INSERT INTO state_events (
+        public_case_id, event_type, state, source,
+        previous_state, actor_ref, request_key, created_at
+      ) VALUES (?1, 'CASE_CHECK_OFFER_SENT', 'PAYMENT_PENDING', 'REVENUE_AUTOPILOT',
+        'CONTACT_CLAIMED', 'REVENUE_AUTOPILOT', ?2, ?3)
+    `).bind(row.public_case_id, checkout.idempotencyKey, sentAt)
   ]);
   return { ok: true, action: 'CASE_CHECK_OFFER_SENT', caseId: row.public_case_id, amountCents: checkout.amountCents };
 }

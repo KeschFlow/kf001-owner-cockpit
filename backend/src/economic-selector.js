@@ -319,7 +319,7 @@ export async function selectBestEconomicCandidate(env) {
   }
 
   const rows = await env.CASE_DB.prepare(`
-    SELECT r.*, c.public_case_id AS existing_case_id
+    SELECT r.*, c.public_case_id AS existing_case_id, c.status AS existing_case_status
     FROM radar_candidates r
     LEFT JOIN cases c ON c.public_case_id = r.public_case_id
     WHERE r.contact_email IS NOT NULL
@@ -359,6 +359,9 @@ export async function selectBestEconomicCandidate(env) {
   const selectionTier = fullWinner ? 'SUCCESS_FEE' : 'CASE_CHECK_49';
   const recommendation = fullWinner ? 'APPROVE OUTREACH' : 'OFFER CASE CHECK';
   const selectionReason = fullWinner ? 'ECONOMIC_WINNER_SELECTED' : 'ECONOMIC_CASE_CHECK_SELECTED';
+  const selectionRequestKey = winner.row.source && winner.row.external_id
+    ? `${winner.row.source}:${winner.row.external_id}`
+    : null;
   if (active?.public_case_id === caseId) {
     await env.CASE_DB.prepare(`
       UPDATE cases SET case_value_score = ?2, recommendation = ?3, version = version + 1, updated_at = ?4
@@ -425,9 +428,11 @@ export async function selectBestEconomicCandidate(env) {
     ),
     env.CASE_DB.prepare(`UPDATE radar_candidates SET status = 'PROMOTED', promoted_at = ?2 WHERE public_case_id = ?1`).bind(caseId, now),
     env.CASE_DB.prepare(`
-      INSERT INTO state_events (public_case_id, event_type, state, source, created_at)
-      VALUES (?1, ?2, 'PENDING_APPROVAL', 'ECONOMIC_SELECTOR_V1', ?3)
-    `).bind(caseId, selectionReason, now)
+      INSERT INTO state_events (
+        public_case_id, event_type, state, source,
+        previous_state, actor_ref, request_key, created_at
+      ) VALUES (?1, ?2, 'PENDING_APPROVAL', 'ECONOMIC_SELECTOR_V1', ?3, 'ECONOMIC_SELECTOR_V1', ?4, ?5)
+    `).bind(caseId, selectionReason, winner.row.existing_case_status || null, selectionRequestKey, now)
   );
 
   await env.CASE_DB.batch(statements);

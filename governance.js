@@ -125,6 +125,19 @@ function renderOwnerGate() {
   const centralRead = ownerState.isSourceOfTruth;
   const centralWrite = centralWriteLive();
   const canDecide = centralWrite && decisionStillOpen();
+  const hasAuthoritativeWorkItem = Boolean(centralRead && ownerState.caseId && decisionStillOpen());
+  const workItemState = hasAuthoritativeWorkItem
+    ? 'active'
+    : (ownerState.noActiveCase || (centralRead && !decisionStillOpen()) ? 'none' : 'unavailable');
+  container.dataset.workItemState = workItemState;
+  container.dataset.workItemCaseId = hasAuthoritativeWorkItem ? String(ownerState.caseId) : '';
+  container.dataset.workItemStatus = hasAuthoritativeWorkItem ? String(ownerState.status) : '';
+  container.dataset.workItemVersion = hasAuthoritativeWorkItem && Number.isInteger(Number(ownerState.version))
+    ? String(ownerState.version)
+    : '';
+  container.dataset.workItemUpdatedAt = hasAuthoritativeWorkItem && ownerState.updatedAt
+    ? String(ownerState.updatedAt)
+    : '';
   container.className = 'bg-gradient-to-br from-amber-950/40 via-slate-800 to-slate-900 p-4 sm:p-5 rounded-2xl border border-amber-500/40 shadow-lg space-y-4';
   container.innerHTML = `
     <div class="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/20 pb-3">

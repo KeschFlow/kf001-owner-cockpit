@@ -65,14 +65,16 @@
       <section id="slimTopCase" class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 space-y-3" role="button" tabindex="0" aria-label="Aktiven Fall öffnen">
         <div class="flex items-center justify-between gap-3">
           <div>
-            <div class="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Aktiver Fall</div>
+            <div id="slimWorkItemLabel" class="text-[10px] uppercase tracking-widest text-slate-500 font-bold">ACTIVE WORK ITEM</div>
             <div id="slimCaseId" class="mt-1 text-base font-black text-white">—</div>
           </div>
           <div id="slimPriority" class="text-[10px] font-mono text-emerald-300 border border-emerald-500/30 rounded-lg px-2 py-1">PRIORITÄT —</div>
         </div>
-        <div class="grid grid-cols-2 gap-2 text-xs">
+        <div id="slimWorkItemDetails" class="grid grid-cols-2 gap-2 text-xs">
           <div class="bg-slate-900 rounded-xl border border-slate-800 p-3"><span class="block text-[9px] text-slate-500 uppercase">Potenzial</span><strong id="slimCaseValue" class="text-white">—</strong></div>
           <div class="bg-slate-900 rounded-xl border border-slate-800 p-3"><span class="block text-[9px] text-slate-500 uppercase">Status</span><strong id="slimCaseStatus" class="text-white">—</strong></div>
+          <div id="slimVersionField" class="bg-slate-900 rounded-xl border border-slate-800 p-3"><span class="block text-[9px] text-slate-500 uppercase">Version</span><strong id="slimCaseVersion" class="text-white">—</strong></div>
+          <div id="slimUpdatedField" class="bg-slate-900 rounded-xl border border-slate-800 p-3"><span class="block text-[9px] text-slate-500 uppercase">Updated</span><strong id="slimCaseUpdated" class="text-white break-words">—</strong></div>
         </div>
         <button id="slimOpenCaseBtn" type="button" class="w-full rounded-xl bg-slate-800 border border-slate-700 text-slate-100 text-sm font-black px-4 py-3">FALL ÖFFNEN</button>
       </section>
@@ -115,6 +117,7 @@
   }
 
   function openActiveCase() {
+    if (document.getElementById('slimTopCase')?.dataset.workItemState !== 'active') return;
     const gate = document.getElementById('ownerGateContainer');
     if (gate) {
       gate.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -169,14 +172,39 @@
     }
 
     const gateText = gate?.textContent || '';
-    const caseId = extractGateValue('ANONYMISIERTE CASE-ID') || document.getElementById('gateStateChip')?.dataset?.caseId || '—';
-    const caseValue = extractGateValue('CASE_VALUE_SCORE') || '—';
-    const impact = extractGateValue('IMPACT-KLASSE') || '—';
-    const status = document.getElementById('gateStateChip')?.textContent?.trim() || '—';
+    const workItemState = gate?.dataset.workItemState || 'unavailable';
+    const hasActiveWorkItem = workItemState === 'active';
+    const caseId = hasActiveWorkItem ? (gate.dataset.workItemCaseId || '—') : '—';
+    const caseValue = hasActiveWorkItem ? (extractGateValue('CASE_VALUE_SCORE') || '—') : '—';
+    const impact = hasActiveWorkItem ? (extractGateValue('IMPACT-KLASSE') || '—') : '—';
+    const status = hasActiveWorkItem ? (gate.dataset.workItemStatus || '—') : '—';
+    const version = hasActiveWorkItem ? (gate.dataset.workItemVersion || '—') : '—';
+    const updatedAt = hasActiveWorkItem ? (gate.dataset.workItemUpdatedAt || '—') : '—';
+    text('slimWorkItemLabel', hasActiveWorkItem
+      ? 'ACTIVE WORK ITEM'
+      : (workItemState === 'none' ? 'NO ACTIVE WORK ITEM' : 'ACTIVE WORK ITEM UNAVAILABLE'));
     text('slimCaseId', caseId);
     text('slimCaseValue', caseValue);
     text('slimCaseStatus', status);
+    text('slimCaseVersion', version);
+    text('slimCaseUpdated', updatedAt);
     text('slimPriority', `PRIORITÄT ${impact}`);
+
+    const topCase = document.getElementById('slimTopCase');
+    const details = document.getElementById('slimWorkItemDetails');
+    const priority = document.getElementById('slimPriority');
+    const openCase = document.getElementById('slimOpenCaseBtn');
+    if (topCase) {
+      topCase.dataset.workItemState = workItemState;
+      topCase.tabIndex = hasActiveWorkItem ? 0 : -1;
+      topCase.setAttribute('aria-disabled', hasActiveWorkItem ? 'false' : 'true');
+      topCase.setAttribute('aria-label', hasActiveWorkItem ? `Active Work Item ${caseId} öffnen` : 'Kein aktives Work Item');
+    }
+    details?.classList.toggle('hidden', !hasActiveWorkItem);
+    priority?.classList.toggle('hidden', !hasActiveWorkItem);
+    openCase?.classList.toggle('hidden', !hasActiveWorkItem);
+    document.getElementById('slimVersionField')?.classList.toggle('hidden', !gate?.dataset.workItemVersion);
+    document.getElementById('slimUpdatedField')?.classList.toggle('hidden', !gate?.dataset.workItemUpdatedAt);
 
     const action = document.getElementById('slimNextAction');
     const actionBtn = document.getElementById('slimActionBtn');

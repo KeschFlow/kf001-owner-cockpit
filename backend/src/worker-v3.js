@@ -161,8 +161,11 @@ export async function handleStripeWebhook(request, env) {
          )
     `).bind(publicCaseId, paidAt, eventId, isCaseCheck ? 1 : 0),
     env.CASE_DB.prepare(`
-      INSERT INTO state_events (public_case_id, event_type, state, source, created_at)
-      SELECT ?1, ?4, 'PAID', 'STRIPE_WEBHOOK', ?2
+      INSERT INTO state_events (
+        public_case_id, event_type, state, source,
+        previous_state, actor_ref, request_key, created_at
+      )
+      SELECT ?1, ?4, 'PAID', 'STRIPE_WEBHOOK', 'PAYMENT_PENDING', 'STRIPE_WEBHOOK', ?3, ?2
        WHERE EXISTS (
          SELECT 1 FROM revenue_autopilot
           WHERE public_case_id = ?1 AND stripe_payment_event_id = ?3 AND payment_status = 'PAID'
