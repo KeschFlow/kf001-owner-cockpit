@@ -629,6 +629,30 @@ async function currentWinner(env) {
   return (rows.results || []).find((row) => autoContactAllowed(row) && hardAutoApproveRules(row, env).approved) || null;
 }
 
+async function currentOwnerApprovedCase(env) {
+  if (!env?.CASE_DB) return null;
+  return env.CASE_DB.prepare(`
+    SELECT c.public_case_id, c.status, c.is_active,
+           COALESCE(e.economic_score, c.case_value_score, 0) AS economic_score,
+           COALESCE(e.amount_approx_usd, 0) AS amount_approx_usd,
+           COALESCE(e.economically_qualified, 0) AS economically_qualified,
+           e.selected_at, e.solvability_score, e.reachability_score, e.evidence_score,
+           e.effort_score, e.uncertainty_score,
+           d.recipient_email, d.recipient_name, d.subject,
+           r.source_title, r.source_excerpt, r.contact_route
+      FROM cases c
+      LEFT JOIN case_economic_scores e ON e.public_case_id = c.public_case_id
+      JOIN dispatch_targets d ON d.public_case_id = c.public_case_id
+      JOIN radar_candidates r ON r.public_case_id = c.public_case_id
+     WHERE c.status = 'APPROVED_PENDING_DISPATCH'
+       AND NOT EXISTS (
+         SELECT 1 FROM revenue_autopilot a WHERE a.public_case_id = c.public_case_id
+       )
+     ORDER BY c.updated_at ASC
+     LIMIT 1
+  `).first();
+}
+
 async function currentCaseCheckCandidate(env) {
   if (!caseCheckEnabled(env)) return null;
   const minScore = numericEnv(env, 'CASE_CHECK_MIN_ECONOMIC_SCORE', 58);
@@ -700,20 +724,26 @@ async function sendInitialOutreach(env, row) {
   return { ok: false, reason: 'CASE_CHECK_CHECKOUT_REQUIRED' };
 }
 
-async function sendCaseCheckOffer(env, row, { replyMonitoringAvailable = true } = {}) {
+async function sendCaseCheckOffer(env, row, {
+  replyMonitoringAvailable = true,
+  manualApproved = false
+} = {}) {
   await ensureAutonomyControlSchema(env);
 
-  const hardDecision = hardAutoApproveRules(row, env);
-  if (!hardDecision.approved) {
-    await appendAutonomyAudit(env, {
-      caseId: row.public_case_id,
-      eventType: 'AUTO_APPROVE_BLOCKED',
-      decision: hardDecision.reasons.join(','),
-      recipientEmail: row.recipient_email,
-      context: { reasons: hardDecision.reasons }
-    });
-    return { ok: true, action: 'PENDING_OWNER_REVIEW', caseId: row.public_case_id, reasons: hardDecision.reasons };
+  if (!manualApproved) {
+    const hardDecision = hardAutoApproveRules(row, env);
+    if (!hardDecision.approved) {
+      await appendAutonomyAudit(env, {
+        caseId: row.public_case_id,
+        eventType: 'AUTO_APPROVE_BLOCKED',
+        decision: hardDecision.reasons.join(','),
+        recipientEmail: row.recipient_email,
+        context: { reasons: hardDecision.reasons }
+      });
+      return { ok: true, action: 'PENDING_OWNER_REVIEW', caseId: row.public_case_id, reasons: hardDecision.reasons };
+    }
   }
+
   if (!gmailConfigured(env)) return { ok: false, reason: 'GMAIL_NOT_CONFIGURED' };
   if (!stripeCheckoutConfigured(env)) return { ok: false, reason: 'STRIPE_NOT_CONFIGURED' };
   if (!autoContactAllowed(row)) return { ok: false, reason: 'AUTO_CONTACT_NOT_VERIFIED_PUBLIC' };
@@ -729,7 +759,8 @@ async function sendCaseCheckOffer(env, row, { replyMonitoringAvailable = true } 
       caseId: row.public_case_id,
       eventType: 'CHECKOUT_CREATE_BLOCKED_OUTREACH',
       decision: clean(error.message, 120),
-      recipientEmail: row.recipient_email
+      recipientEmail: row.recipient_email,
+      context: { manualApproved }
     });
     return { ok: false, reason: 'CASE_CHECK_CHECKOUT_FAILED', error: clean(error.message, 120) };
   }
@@ -740,8 +771,9 @@ async function sendCaseCheckOffer(env, row, { replyMonitoringAvailable = true } 
   const preflight = await safeOutreachPreflight(env, row, {
     message: body,
     checkoutUrl: checkout.url,
-    requireReplyMonitoring: true,
-    replyMonitoringAvailable
+    requireReplyMonitoring: false,
+    replyMonitoringAvailable,
+    requireHardQualification: !manualApproved
   });
   if (!preflight.approved) {
     await appendAutonomyAudit(env, {
@@ -750,15 +782,16 @@ async function sendCaseCheckOffer(env, row, { replyMonitoringAvailable = true } 
       decision: preflight.reasons.join(','),
       message: body,
       recipientEmail: row.recipient_email,
-      context: { reasons: preflight.reasons }
+      context: { reasons: preflight.reasons, manualApproved }
     });
     return { ok: true, action: 'PENDING_OWNER_REVIEW', caseId: row.public_case_id, reasons: preflight.reasons };
   }
 
-  if (!(await claimDailyQuota(env))) return { ok: true, action: 'DAILY_OUTREACH_CAP_REACHED' };
+  if (!(await claimDailyQuota(env))) return { ok: true, action: 'DAILY_OUTREACH_CAP_REACHED', caseId: row.public_case_id };
 
   const subject = clean(row.subject || 'Platform/Billing Case Check for your public report', 300);
   const claimedAt = nowIso();
+  const decisionLabel = manualApproved ? 'OWNER_APPROVED' : 'AUTO_APPROVED';
   try {
     await env.CASE_DB.prepare(`
       INSERT INTO revenue_autopilot (
@@ -769,7 +802,7 @@ async function sendCaseCheckOffer(env, row, { replyMonitoringAvailable = true } 
         checkout_public_token, outbound_contact_count, auto_decision, updated_at
       ) VALUES (
         ?1, 'CONTACT_CLAIMED', ?2, ?3, ?4, ?5, ?6, 'CASE_CHECK_49',
-        ?7, ?8, ?9, ?10, ?11, 'EUR', ?12, 0, 'AUTO_APPROVED', ?9
+        ?7, ?8, ?9, ?10, ?11, 'EUR', ?12, 0, ?13, ?9
       )
     `).bind(
       row.public_case_id,
@@ -783,33 +816,50 @@ async function sendCaseCheckOffer(env, row, { replyMonitoringAvailable = true } 
       claimedAt,
       checkout.expiresAt,
       checkout.amountCents,
-      checkoutToken
+      checkoutToken,
+      decisionLabel
     ).run();
   } catch (error) {
     return { ok: false, reason: 'ALREADY_CLAIMED', error: clean(error.message, 120) };
   }
 
-  await env.CASE_DB.batch([
-    env.CASE_DB.prepare(`
-      UPDATE cases
-         SET status = 'APPROVED_PENDING_DISPATCH', version = version + 1, updated_at = ?2
-       WHERE public_case_id = ?1 AND status = 'PENDING_APPROVAL'
-    `).bind(row.public_case_id, claimedAt),
-    env.CASE_DB.prepare(`
+  if (manualApproved) {
+    await env.CASE_DB.prepare(`
       INSERT INTO state_events (
         public_case_id, event_type, state, source,
         previous_state, actor_ref, request_key, created_at
-      ) VALUES (?1, 'AUTONOMY_AUTO_APPROVED', 'APPROVED_PENDING_DISPATCH', 'AUTONOMY_CONTROL_V1',
-                'PENDING_APPROVAL', 'AUTONOMY_CONTROL_V1', ?2, ?3)
-    `).bind(row.public_case_id, checkout.idempotencyKey, claimedAt)
-  ]);
+      ) VALUES (?1, 'CONTROLLED_OWNER_DISPATCH_READY', 'APPROVED_PENDING_DISPATCH', 'AUTONOMY_CONTROL_V1',
+                'APPROVED_PENDING_DISPATCH', 'OWNER_WEBAUTHN', ?2, ?3)
+    `).bind(row.public_case_id, checkout.idempotencyKey, claimedAt).run();
+  } else {
+    await env.CASE_DB.batch([
+      env.CASE_DB.prepare(`
+        UPDATE cases
+           SET status = 'APPROVED_PENDING_DISPATCH', version = version + 1, updated_at = ?2
+         WHERE public_case_id = ?1 AND status = 'PENDING_APPROVAL'
+      `).bind(row.public_case_id, claimedAt),
+      env.CASE_DB.prepare(`
+        INSERT INTO state_events (
+          public_case_id, event_type, state, source,
+          previous_state, actor_ref, request_key, created_at
+        ) VALUES (?1, 'AUTONOMY_AUTO_APPROVED', 'APPROVED_PENDING_DISPATCH', 'AUTONOMY_CONTROL_V1',
+                  'PENDING_APPROVAL', 'AUTONOMY_CONTROL_V1', ?2, ?3)
+      `).bind(row.public_case_id, checkout.idempotencyKey, claimedAt)
+    ]);
+  }
+
   await appendAutonomyAudit(env, {
     caseId: row.public_case_id,
-    eventType: 'AUTO_APPROVED',
-    decision: 'ALL_HARD_RULES_PASS',
+    eventType: manualApproved ? 'OWNER_APPROVED_SEND_READY' : 'AUTO_APPROVED',
+    decision: manualApproved ? 'OWNER_OVERRIDE_WITH_DELIVERY_SAFETY_PASS' : 'ALL_HARD_RULES_PASS',
     message: body,
     recipientEmail: row.recipient_email,
-    context: { economicScore: Number(row.economic_score || 0), amountApproxUsd: Number(row.amount_approx_usd || 0) }
+    context: {
+      economicScore: Number(row.economic_score || 0),
+      amountApproxUsd: Number(row.amount_approx_usd || 0),
+      manualApproved,
+      replyMonitoringAvailable
+    }
   });
 
   let sent;
@@ -834,7 +884,9 @@ async function sendCaseCheckOffer(env, row, { replyMonitoringAvailable = true } 
 
   const sentAt = nowIso();
   const followUpHours = Math.max(1, numericEnv(env, 'AUTOPILOT_FOLLOWUP_HOURS', 12));
-  const nextFollowUpAt = new Date(Date.parse(sentAt) + followUpHours * 3600000).toISOString();
+  const nextFollowUpAt = replyMonitoringAvailable
+    ? new Date(Date.parse(sentAt) + followUpHours * 3600000).toISOString()
+    : null;
   await env.CASE_DB.batch([
     env.CASE_DB.prepare(`
       UPDATE revenue_autopilot
@@ -863,13 +915,24 @@ async function sendCaseCheckOffer(env, row, { replyMonitoringAvailable = true } 
   await appendAutonomyAudit(env, {
     caseId: row.public_case_id,
     eventType: 'OUTREACH_SENT',
-    decision: 'AUTO_APPROVED',
+    decision: decisionLabel,
     message: body,
     recipientEmail: row.recipient_email,
     providerMessageId: sent.id,
-    context: { contactNumber: 1, checkoutTracked: true }
+    context: {
+      contactNumber: 1,
+      checkoutTracked: true,
+      replyMonitoringAvailable,
+      followUpScheduled: Boolean(nextFollowUpAt)
+    }
   });
-  return { ok: true, action: 'CASE_CHECK_OFFER_SENT', caseId: row.public_case_id, amountCents: checkout.amountCents };
+  return {
+    ok: true,
+    action: 'CASE_CHECK_OFFER_SENT',
+    caseId: row.public_case_id,
+    amountCents: checkout.amountCents,
+    decision: decisionLabel
+  };
 }
 
 async function updateInbound(env, record, message, classification) {
