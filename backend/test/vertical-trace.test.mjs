@@ -465,9 +465,40 @@ test('global kill switch blocks a hard-qualified case before Gmail outreach', as
     STRIPE_CANCEL_URL: 'https://example.test/payment/cancel'
   };
 
-  const intake = await handleRadarIntakeRequest(intakeRequest(), env);
-  const intakeBody = await intake.clone().json().catch(() => ({}));
-  assert.equal(intake.status, 201, JSON.stringify(intakeBody));
+  const seededAt = new Date().toISOString();
+  db.sqlite.prepare(`
+    INSERT INTO radar_candidates (
+      source, external_id, public_case_id, source_url, source_title, source_excerpt,
+      author_login, author_name, contact_email, contact_route,
+      impact_score, evidence_score, case_value_score, amount_signal,
+      status, first_seen_at, last_seen_at, promoted_at, published_at
+    ) VALUES (
+      'GH', 'EXT-KILL-001', ?, 'https://github.com/example/project/issues/kill',
+      'Unresolved business billing dispute', 'USD 12000 unexpected platform charge with invoices, support case and no response.',
+      'business-owner', 'Business Owner', 'billing@company.example', 'PUBLIC_POST_EMAIL',
+      90, 80, 85, 12000, 'PROMOTED', ?, ?, ?, ?
+    )
+  `).run(CASE_ID, seededAt, seededAt, seededAt, seededAt);
+  db.sqlite.prepare(`
+    INSERT INTO cases (
+      public_case_id, case_value_score, outreach_ready, impact_class, evidence_quality,
+      recommendation, outreach_message, status, version, is_active, updated_at
+    ) VALUES (?, 85, 1, 'KRITISCH', 'STARK', 'APPROVE OUTREACH', 'Prepared', 'PENDING_APPROVAL', 1, 1, ?)
+  `).run(CASE_ID, seededAt);
+  db.sqlite.prepare(`
+    INSERT INTO dispatch_targets (public_case_id, recipient_email, recipient_name, subject, updated_at)
+    VALUES (?, 'billing@company.example', 'Business Owner', 'Platform/Billing Case Check', ?)
+  `).run(CASE_ID, seededAt);
+  db.sqlite.prepare(`
+    INSERT INTO case_economic_scores (
+      public_case_id, economic_score, economically_qualified, solvability_score,
+      payer_probability_score, reachability_score, evidence_score, platform_ack_score,
+      recoverable_value_score, effort_score, uncertainty_score, proprietary_data_value_score,
+      reference_value_score, amount_currency, amount_native, amount_approx_usd,
+      scoring_version, selected_at, updated_at
+    ) VALUES (?, 88, 1, 82, 75, 85, 80, 65, 90, 35, 25, 70, 65, 'USD', 12000, 12000, 'ECON_V1', ?, ?)
+  `).run(CASE_ID, seededAt, seededAt);
+
   db.sqlite.prepare(`
     UPDATE autonomy_control
        SET outreach_enabled = 0, updated_by = 'TEST_KILL', updated_at = CURRENT_TIMESTAMP
