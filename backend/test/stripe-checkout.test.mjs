@@ -292,9 +292,9 @@ test('public status contains only safe pricing and stage fields', async () => {
     openCaseBlocksNewLead: false,
     openCaseCount: 1,
     maxOpenCasesPerRun: 25,
-    dailyNewOutreachCap: 1,
-    dailyNewOutreachSent: 0,
-    newOutreachAllowedToday: true,
+    outreachCadence: '24_7',
+    initialOutreachLimitPerCase: 1,
+    globalDailyOutreachCap: null,
     paymentStatus: 'REQUESTED'
   });
 });

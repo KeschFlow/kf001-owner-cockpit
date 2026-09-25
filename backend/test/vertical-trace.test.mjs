@@ -221,7 +221,6 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
     CASE_CHECK_MIN_ECONOMIC_SCORE: '58',
     CASE_CHECK_MIN_VALUE_USD: '500',
     CASE_CHECK_PRICE_EUR: '49',
-    AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY: '1',
     AUTOPILOT_FOLLOWUP_HOURS: '12',
     AUTOPILOT_MAX_CONTACTS_PER_CASE: '2',
     PUBLIC_WORKER_URL: 'https://worker.test',
@@ -306,7 +305,6 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
   assert.equal(db.get('SELECT COUNT(*) AS count FROM revenue_autopilot WHERE public_case_id = ?', CASE_ID).count, 1);
   assert.equal(db.get('SELECT COUNT(*) AS count FROM dispatch_log WHERE public_case_id = ?', CASE_ID).count, 1);
 
-  db.sqlite.prepare('UPDATE revenue_autopilot_quota SET sent_count = 0').run();
   const duplicateCycle = await runRevenueAutopilot(env);
   assert.equal(duplicateCycle.action, 'NO_WINNER');
   assert.equal(calls.stripe, 1);
@@ -452,7 +450,6 @@ test('global kill switch blocks a hard-qualified case before Gmail outreach', as
     CASE_CHECK_MIN_ECONOMIC_SCORE: '58',
     CASE_CHECK_MIN_VALUE_USD: '500',
     CASE_CHECK_PRICE_EUR: '49',
-    AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY: '1',
     AUTOPILOT_FOLLOWUP_HOURS: '12',
     AUTOPILOT_MAX_CONTACTS_PER_CASE: '2',
     PUBLIC_WORKER_URL: 'https://worker.test',
@@ -512,7 +509,6 @@ test('global kill switch blocks a hard-qualified case before Gmail outreach', as
   assert.equal(gmailSends, 0);
   assert.equal(db.get('SELECT COUNT(*) AS count FROM dispatch_log WHERE public_case_id = ?', CASE_ID).count, 0);
   assert.equal(db.get('SELECT status FROM cases WHERE public_case_id = ?', CASE_ID).status, 'PENDING_APPROVAL');
-  assert.equal(db.get('SELECT sent_count FROM revenue_autopilot_quota LIMIT 1')?.sent_count || 0, 0);
   assert.equal(
     db.get("SELECT COUNT(*) AS count FROM autonomy_audit_log WHERE public_case_id = ? AND event_type = 'OUTREACH_PREFLIGHT_BLOCKED'", CASE_ID).count,
     1
