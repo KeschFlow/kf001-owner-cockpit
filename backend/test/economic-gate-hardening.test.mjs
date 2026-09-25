@@ -7,9 +7,10 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const workerV2 = fs.readFileSync(path.join(here, '..', 'src', 'worker-v2.js'), 'utf8');
 
-test('owner APPROVE is hard-blocked unless the selected economic winner is qualified', () => {
+test('owner APPROVE is limited to a selected revenue candidate while auto-approve remains stricter', () => {
   assert.match(workerV2, /ECONOMIC_APPROVAL_BLOCKED/);
-  assert.match(workerV2, /economically_qualified/);
+  assert.match(workerV2, /economicRowIsSelectedRevenueCandidate\(row, env\)/);
+  assert.match(workerV2, /autoQualified: economicRowIsApprovalQualified\(row\)/);
   assert.match(workerV2, /economic_score/);
   assert.match(workerV2, /selected_at/);
   assert.match(workerV2, /ECON_V1/);
@@ -26,8 +27,8 @@ test('stale or uneconomic pending gates are suppressed before owner-state is ser
   assert.match(workerV2, /await suppressInvalidPendingGate\(env\)/);
 });
 
-test('selected case-check candidates stay active for the existing revenue autopilot but not owner APPROVE', () => {
+test('selected case-check candidates stay active for explicit owner review', () => {
   assert.match(workerV2, /economicRowIsSelectedRevenueCandidate\(active, env\)/);
   assert.match(workerV2, /caseCheckEligible/);
-  assert.match(workerV2, /allowed:\s*economicRowIsApprovalQualified\(row\)/);
+  assert.match(workerV2, /allowed: economicRowIsSelectedRevenueCandidate\(row, env\)/);
 });
