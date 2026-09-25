@@ -192,16 +192,30 @@ export async function isRecipientSuppressed(env, email) {
   return Boolean(row);
 }
 
-export function hardAutoApproveRules(row, env = {}) {
+export function deliverySafetyRules(row, env = {}) {
   const reasons = [];
-  const minScore = numberEnv(env, 'AUTOPILOT_MIN_ECONOMIC_SCORE', 72);
-  const minValue = numberEnv(env, 'AUTOPILOT_MIN_VALUE_USD', 8000);
   const email = String(row?.recipient_email || '').trim();
   const sender = String(env.GMAIL_FROM || '').trim();
   const route = String(row?.contact_route || '');
   const titleAndExcerpt = `${row?.source_title || ''}\n${row?.source_excerpt || ''}`;
 
   if (String(env.REVENUE_AUTOPILOT_ENABLED || '').toLowerCase() !== 'true') reasons.push('AUTOPILOT_DISABLED');
+  if (!validEmail(email)) reasons.push('RECIPIENT_INVALID');
+  if (!validEmail(sender)) reasons.push('SENDER_INVALID');
+  if (email && sender && email.toLowerCase() === sender.toLowerCase()) reasons.push('SENDER_EQUALS_RECIPIENT');
+  if (!ROLE_EMAIL.test(email) && !ALLOWED_CONTACT_ROUTES.has(route)) reasons.push('CONTACT_ROUTE_NOT_VERIFIED_PUBLIC');
+  if (HARD_EXCLUSION.test(titleAndExcerpt)) reasons.push('EXCLUSION_SIGNAL');
+  if (!gmailConfigured(env)) reasons.push('GMAIL_NOT_CONFIGURED');
+  if (!stripeCheckoutConfigured(env)) reasons.push('STRIPE_NOT_CONFIGURED');
+  if (!/^https:\/\//i.test(String(env.PUBLIC_WORKER_URL || ''))) reasons.push('PUBLIC_WORKER_URL_NOT_CONFIGURED');
+  return reasons;
+}
+
+export function hardAutoApproveRules(row, env = {}) {
+  const reasons = [...deliverySafetyRules(row, env)];
+  const minScore = numberEnv(env, 'AUTOPILOT_MIN_ECONOMIC_SCORE', 72);
+  const minValue = numberEnv(env, 'AUTOPILOT_MIN_VALUE_USD', 8000);
+
   if (String(env.AUTOPILOT_AUTO_APPROVE_ENABLED || '').toLowerCase() !== 'true') reasons.push('AUTO_APPROVE_DISABLED');
   if (Number(row?.economically_qualified || 0) !== 1) reasons.push('ECONOMICALLY_NOT_QUALIFIED');
   if (Number(row?.economic_score || 0) < minScore) reasons.push('ECONOMIC_SCORE_BELOW_MINIMUM');
@@ -212,18 +226,10 @@ export function hardAutoApproveRules(row, env = {}) {
   if (Number(row?.effort_score ?? 100) > 70) reasons.push('EFFORT_TOO_HIGH');
   if (Number(row?.uncertainty_score ?? 100) > 55) reasons.push('UNCERTAINTY_TOO_HIGH');
   if (!row?.selected_at) reasons.push('NOT_ECONOMIC_WINNER');
-  if (!validEmail(email)) reasons.push('RECIPIENT_INVALID');
-  if (!validEmail(sender)) reasons.push('SENDER_INVALID');
-  if (email && sender && email.toLowerCase() === sender.toLowerCase()) reasons.push('SENDER_EQUALS_RECIPIENT');
-  if (!ROLE_EMAIL.test(email) && !ALLOWED_CONTACT_ROUTES.has(route)) reasons.push('CONTACT_ROUTE_NOT_VERIFIED_PUBLIC');
-  if (HARD_EXCLUSION.test(titleAndExcerpt)) reasons.push('EXCLUSION_SIGNAL');
-  if (!gmailConfigured(env)) reasons.push('GMAIL_NOT_CONFIGURED');
-  if (!stripeCheckoutConfigured(env)) reasons.push('STRIPE_NOT_CONFIGURED');
-  if (!/^https:\/\//i.test(String(env.PUBLIC_WORKER_URL || ''))) reasons.push('PUBLIC_WORKER_URL_NOT_CONFIGURED');
 
   return {
     approved: reasons.length === 0,
-    reasons,
+    reasons: [...new Set(reasons)],
     thresholds: {
       minEconomicScore: minScore,
       minValueUsd: minValue,
@@ -239,13 +245,14 @@ export function hardAutoApproveRules(row, env = {}) {
 export async function safeOutreachPreflight(env, row, {
   message,
   checkoutUrl,
-  requireReplyMonitoring = true,
+  requireReplyMonitoring = false,
   replyMonitoringAvailable = false,
-  allowPriorSent = false
+  allowPriorSent = false,
+  requireHardQualification = true
 } = {}) {
   await ensureAutonomyControlSchema(env);
   const decision = hardAutoApproveRules(row, env);
-  const reasons = [...decision.reasons];
+  const reasons = requireHardQualification ? [...decision.reasons] : deliverySafetyRules(row, env);
   const control = await autonomyControlStatus(env);
   const recipient = String(row?.recipient_email || '').trim();
 
