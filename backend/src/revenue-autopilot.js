@@ -1,4 +1,4 @@
-import { getGmailThread, gmailConfigured, sendGmailReply } from './gmail.js';
+import { getGmailThread, gmailConfigured, sendGmail, sendGmailReply } from './gmail.js';
 import {
   appendAutonomyAudit,
   ensureAutonomyControlSchema,
@@ -814,33 +814,22 @@ async function sendCaseCheckOffer(env, row, { replyMonitoringAvailable = true } 
 
   let sent;
   try {
-    sent = await sendGmailReply(env, {
-      to: row.recipient_email,
-      subject,
-      text: body,
-      threadId: null
-    });
+    sent = await sendGmail(env, { to: row.recipient_email, subject, text: body });
   } catch (error) {
-    // sendGmailReply requires a thread; use the proven first-message path below.
-    try {
-      const { sendGmail } = await import('./gmail.js');
-      sent = await sendGmail(env, { to: row.recipient_email, subject, text: body });
-    } catch (sendError) {
-      const code = clean(sendError.message || error.message || 'GMAIL_SEND_FAILED', 120);
-      await env.CASE_DB.prepare(`
-        UPDATE revenue_autopilot
-           SET stage = 'SEND_UNKNOWN', error_code = ?2, owner_attention_reason = 'SEND_UNKNOWN', updated_at = ?3
-         WHERE public_case_id = ?1
-      `).bind(row.public_case_id, code, nowIso()).run();
-      await appendAutonomyAudit(env, {
-        caseId: row.public_case_id,
-        eventType: 'OUTREACH_SEND_UNKNOWN',
-        decision: code,
-        message: body,
-        recipientEmail: row.recipient_email
-      });
-      return { ok: false, reason: 'SEND_UNKNOWN', error: code };
-    }
+    const code = clean(error.message || 'GMAIL_SEND_FAILED', 120);
+    await env.CASE_DB.prepare(`
+      UPDATE revenue_autopilot
+         SET stage = 'SEND_UNKNOWN', error_code = ?2, owner_attention_reason = 'SEND_UNKNOWN', updated_at = ?3
+       WHERE public_case_id = ?1
+    `).bind(row.public_case_id, code, nowIso()).run();
+    await appendAutonomyAudit(env, {
+      caseId: row.public_case_id,
+      eventType: 'OUTREACH_SEND_UNKNOWN',
+      decision: code,
+      message: body,
+      recipientEmail: row.recipient_email
+    });
+    return { ok: false, reason: 'SEND_UNKNOWN', error: code };
   }
 
   const sentAt = nowIso();
@@ -1134,6 +1123,7 @@ async function monitorOpenCases(env, records, monitor = monitorOpenCase) {
 async function acquireDailyCandidate(env, operations = {}) {
   const quotaStatus = operations.dailyQuotaStatus || dailyQuotaStatus;
   const selectWinner = operations.currentWinner || currentWinner;
+  const sendWinner = operations.sendInitialOutreach || sendCaseCheckOffer;
   const selectCaseCheck = operations.currentCaseCheckCandidate || currentCaseCheckCandidate;
   const sendCaseCheck = operations.sendCaseCheckOffer || sendCaseCheckOffer;
 
@@ -1141,7 +1131,7 @@ async function acquireDailyCandidate(env, operations = {}) {
   if (!quota.available) return { ok: true, action: 'DAILY_OUTREACH_CAP_REACHED', quota };
 
   const winner = await selectWinner(env);
-  if (winner) return { ...(await sendCaseCheck(env, winner, { replyMonitoringAvailable: true })), quota };
+  if (winner) return { ...(await sendWinner(env, winner, { replyMonitoringAvailable: true })), quota };
 
   const caseCheckCandidate = await selectCaseCheck(env);
   if (caseCheckCandidate) {
