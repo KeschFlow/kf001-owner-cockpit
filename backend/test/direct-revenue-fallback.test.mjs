@@ -15,11 +15,9 @@ test('Gmail read capability is probed independently from Gmail send capability',
   assert.match(workerV3, /replyProcessingAvailable = await gmailReadAvailable\(env\)/);
 });
 
-test('missing Gmail read capability holds all new outreach instead of sending blind follow-ups', () => {
-  assert.match(workerV3, /mode: 'SAFE_HOLD_NO_NEW_OUTREACH'/);
-  assert.match(workerV3, /action: 'REPLY_MONITOR_UNAVAILABLE'/);
-  const fallback = workerV3.slice(workerV3.indexOf('async function runDirectRevenueFallback'), workerV3.indexOf('// A sidecar failure'));
-  assert.doesNotMatch(fallback, /acquireDailyCandidate/);
+test('missing Gmail read capability still permits one safe initial checkout outreach but no reply monitor or follow-up', () => {
+  assert.match(workerV3, /runRevenueAutopilot\(env, \{ replyMonitoringAvailable: replyProcessingAvailable \}\)/);
+  assert.match(workerV3, /CONTROLLED_SEND_ONLY_NO_FOLLOWUP/);
 });
 
 test('blocked requested payments are normalized back to Stripe-waiting states', async () => {
@@ -32,8 +30,8 @@ test('blocked requested payments are normalized back to Stripe-waiting states', 
   assert.match(calls[0].sql, /payment_status = 'REQUESTED'/);
 });
 
-test('public status tells the truth about safe-hold mode', () => {
-  assert.match(workerV3, /revenueMode: replyProcessingAvailable \? 'CONTROLLED_AUTONOMY' : 'SAFE_HOLD_NO_NEW_OUTREACH'/);
+test('public status tells the truth about send-only mode', () => {
+  assert.match(workerV3, /revenueMode: replyProcessingAvailable \? 'CONTROLLED_AUTONOMY' : 'CONTROLLED_SEND_ONLY_NO_FOLLOWUP'/);
 });
 
 test('Stripe webhook accepts a payment record that Gmail previously marked reply-monitor-blocked', () => {
