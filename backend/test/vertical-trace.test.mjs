@@ -471,14 +471,14 @@ test('global kill switch blocks a hard-qualified case before Gmail outreach', as
       source, external_id, public_case_id, source_url, source_title, source_excerpt,
       author_login, author_name, contact_email, contact_route,
       impact_score, evidence_score, case_value_score, amount_signal,
-      status, first_seen_at, last_seen_at, promoted_at, published_at
+      status, first_seen_at, last_seen_at, promoted_at
     ) VALUES (
       'GH', 'EXT-KILL-001', ?, 'https://github.com/example/project/issues/kill',
       'Unresolved business billing dispute', 'USD 12000 unexpected platform charge with invoices, support case and no response.',
       'business-owner', 'Business Owner', 'billing@company.example', 'PUBLIC_POST_EMAIL',
-      90, 80, 85, 12000, 'PROMOTED', ?, ?, ?, ?
+      90, 80, 85, 12000, 'PROMOTED', ?, ?, ?
     )
-  `).run(CASE_ID, seededAt, seededAt, seededAt, seededAt);
+  `).run(CASE_ID, seededAt, seededAt, seededAt);
   db.sqlite.prepare(`
     INSERT INTO cases (
       public_case_id, case_value_score, outreach_ready, impact_class, evidence_quality,
