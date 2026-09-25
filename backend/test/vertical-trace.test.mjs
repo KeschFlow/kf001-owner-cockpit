@@ -19,8 +19,8 @@ const CASE_CHECK_FIXTURE = Object.freeze({
   platform: 'github',
   sourceUrl: 'https://github.com/example/project/issues/42',
   title: 'Business account reports unresolved platform auto-charge discrepancy',
-  rawDescription: 'A company developer documents USD 860 in disputed unexpected platform charges and an unexplained account balance. The public report includes invoices, screenshots, transaction dates, billing records, a support case ID and a detailed support timeline. The chronology starts on 2026-07-14, links the public supporting record at https://example.com/public-billing-record, and records each response supplied to billing support. The company requested a refund and supplied the requested records, but the issue remains unresolved after repeated billing support contact with no response. The business account owner requests a clear escalation route and identifies the account, invoice and affected payment period.',
-  claimAmountUsd: 860,
+  rawDescription: 'A company developer documents USD 12,000 in disputed unexpected platform charges and an unexplained account balance. The public report includes invoices, screenshots, transaction dates, billing records, a support case ID and a detailed support timeline. The chronology starts on 2026-07-14, links the public supporting record at https://example.com/public-billing-record, and records each response supplied to billing support. The company requested a refund and supplied the requested records, but the issue remains unresolved after repeated billing support contact with no response. The business account owner requests a clear escalation route and identifies the account, invoice and affected payment period.',
+  claimAmountUsd: 12000,
   authorName: 'Business Account Owner',
   contactEmail: 'billing@company.example',
   contactRoute: 'PUBLIC_POST_EMAIL'
@@ -145,7 +145,8 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
     '0010_revenue_autopilot.sql',
     '0011_dynamic_success_fee_checkout.sql',
     '0012_case_check_offer.sql',
-    '0013_state_events_audit_context.sql'
+    '0013_state_events_audit_context.sql',
+    '0014_controlled_autonomy.sql'
   ]) {
     db.execMigration(name);
   }
@@ -192,11 +193,17 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
     CASE_DB: db,
     RADAR_INGEST_TOKEN: 'UNIT_TEST_ONLY',
     REVENUE_AUTOPILOT_ENABLED: 'true',
+    AUTOPILOT_AUTO_APPROVE_ENABLED: 'true',
+    AUTOPILOT_MIN_ECONOMIC_SCORE: '72',
+    AUTOPILOT_MIN_VALUE_USD: '8000',
     CASE_CHECK_ENABLED: 'true',
     CASE_CHECK_MIN_ECONOMIC_SCORE: '58',
     CASE_CHECK_MIN_VALUE_USD: '500',
     CASE_CHECK_PRICE_EUR: '49',
     AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY: '1',
+    AUTOPILOT_FOLLOWUP_HOURS: '12',
+    AUTOPILOT_MAX_CONTACTS_PER_CASE: '2',
+    PUBLIC_WORKER_URL: 'https://worker.test',
     GMAIL_CLIENT_ID: 'unit-test-client-id',
     GMAIL_CLIENT_SECRET: 'unit-test-client-secret',
     GMAIL_REFRESH_TOKEN: 'unit-test-refresh-token',
@@ -218,8 +225,8 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
   const firstBody = await firstIntake.json();
   assert.equal(firstIntake.status, 201);
   assert.equal(firstBody.intake.publicCaseId, CASE_ID);
-  assert.equal(firstBody.economicSelection.reason, 'ECONOMIC_CASE_CHECK_SELECTED');
-  assert.equal(firstBody.economicSelection.selectionTier, 'CASE_CHECK_49');
+  assert.equal(firstBody.economicSelection.reason, 'ECONOMIC_WINNER_SELECTED');
+  assert.equal(firstBody.economicSelection.selectionTier, 'SUCCESS_FEE');
 
   const initialCase = db.get('SELECT * FROM cases WHERE public_case_id = ?', CASE_ID);
   assert.equal(initialCase.status, 'PENDING_APPROVAL');
