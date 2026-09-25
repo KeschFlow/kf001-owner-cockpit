@@ -3,6 +3,16 @@ import { enrichQualifiedContacts } from './contact-enrichment.js';
 import { selectBestEconomicCandidate } from './economic-selector.js';
 import { gmailReadAvailable } from './gmail.js';
 import { REVENUE_AUTOPILOT_INTERNALS, revenueAutopilotStatus, runRevenueAutopilot } from './revenue-autopilot.js';
+import { verifyOwnerAssertion } from './webauthn.js';
+import {
+  appendAutonomyAudit,
+  autonomyControlStatus,
+  enforcePendingCaseSafety,
+  ensureAutonomyControlSchema,
+  resolveCheckoutRedirect,
+  revenueMoneyMetrics,
+  setOutreachEnabled
+} from './autonomy-control.js';
 
 const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), {
   status,
@@ -13,6 +23,18 @@ const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(b
     ...headers
   }
 });
+
+function corsHeaders(request, env) {
+  const origin = request.headers.get('Origin');
+  if (!origin || origin !== env.PUBLIC_APP_ORIGIN) return {};
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Max-Age': '86400',
+    Vary: 'Origin'
+  };
+}
 
 export async function verifyStripeSignature(rawBody, signatureHeader, secret) {
   if (!secret || !signatureHeader) return false;
@@ -71,6 +93,7 @@ async function readBodyLimited(request, maximumBytes) {
 }
 
 export async function handleStripeWebhook(request, env) {
+  await ensureAutonomyControlSchema(env);
   let rawBody;
   try { rawBody = await readBodyLimited(request, 65536); } catch {
     return json({ ok: false, error: 'WEBHOOK_BODY_TOO_LARGE' }, 413);
@@ -144,6 +167,7 @@ export async function handleStripeWebhook(request, env) {
       UPDATE revenue_autopilot
          SET stage = ?7, payment_status = 'PAID', payment_confirmed_at = ?2,
              stripe_payment_intent_id = ?3, stripe_payment_event_id = ?4,
+             owner_attention_reason = 'PAYMENT_RECEIVED',
              error_code = NULL, updated_at = ?2
        WHERE public_case_id = ?1
          AND (stage = ?8 OR (stage = 'REPLY_MONITOR_BLOCKED' AND payment_status = 'REQUESTED'))
@@ -193,6 +217,14 @@ export async function handleStripeWebhook(request, env) {
     return rejectStripeEvent(env, eventId, 'PAYMENT_STATE_CONFLICT', 409);
   }
 
+  await appendAutonomyAudit(env, {
+    caseId: publicCaseId,
+    eventType: 'PAYMENT_RECEIVED',
+    decision: isCaseCheck ? 'CASE_CHECK_49_PAID' : 'SUCCESS_FEE_PAID',
+    providerMessageId: eventId,
+    context: { amountMinor: expectedAmount, currency: 'EUR', sessionId }
+  });
+
   return json({ ok: true, received: true, paymentStatus: 'PAID' });
 }
 
@@ -215,13 +247,11 @@ async function normalizePaymentWaitStates(env) {
 
 async function runDirectRevenueFallback(env) {
   const normalizedPayments = await normalizePaymentWaitStates(env);
-  const acquisition = await REVENUE_AUTOPILOT_INTERNALS.acquireDailyCandidate(env, {
-    currentWinner: async () => null
-  });
   return {
-    ...acquisition,
+    ok: true,
+    action: 'REPLY_MONITOR_UNAVAILABLE',
     enabled: true,
-    mode: 'DIRECT_CASE_CHECK_FALLBACK',
+    mode: 'SAFE_HOLD_NO_NEW_OUTREACH',
     replyProcessingAvailable: false,
     normalizedPayments
   };
@@ -230,16 +260,79 @@ async function runDirectRevenueFallback(env) {
 // A sidecar failure must never break the proven radar or owner-gate response.
 async function runAutonomySidecar(env) {
   try {
+    await ensureAutonomyControlSchema(env);
+    const safetyBeforeSelection = await enforcePendingCaseSafety(env);
     const contactEnrichment = await enrichQualifiedContacts(env);
     const economicSelection = await selectBestEconomicCandidate(env);
+    const safetyAfterSelection = await enforcePendingCaseSafety(env);
     const replyProcessingAvailable = await gmailReadAvailable(env);
     const revenueAutopilot = replyProcessingAvailable
       ? await runRevenueAutopilot(env)
       : await runDirectRevenueFallback(env);
-    return { ok: true, contactEnrichment, economicSelection, replyProcessingAvailable, revenueAutopilot };
+    return {
+      ok: true,
+      safetyBeforeSelection,
+      contactEnrichment,
+      economicSelection,
+      safetyAfterSelection,
+      replyProcessingAvailable,
+      revenueAutopilot
+    };
   } catch (error) {
     return { ok: false, error: String(error?.message || 'AUTONOMY_SIDECAR_FAILED') };
   }
+}
+
+async function handleKillSwitch(request, env) {
+  const cors = corsHeaders(request, env);
+  const body = await request.json().catch(() => null);
+  if (!body || typeof body.outreachEnabled !== 'boolean') {
+    return json({ ok: false, error: 'INVALID_KILL_SWITCH_VALUE' }, 400, cors);
+  }
+  const payload = { outreachEnabled: body.outreachEnabled };
+  try {
+    await verifyOwnerAssertion(env, body.auth, 'AUTOPILOT_KILL_SWITCH', payload);
+    const result = await setOutreachEnabled(env, body.outreachEnabled, 'OWNER_PASSKEY');
+    return json({ ok: true, ...result }, 200, cors);
+  } catch (error) {
+    const authError = String(error.message || '').startsWith('WEBAUTHN_') || String(error.message || '').startsWith('OWNER_');
+    return json({ ok: false, error: String(error.message || 'KILL_SWITCH_FAILED') }, authError ? 401 : 500, cors);
+  }
+}
+
+async function handleAutopilotStatus(request, env) {
+  const cors = corsHeaders(request, env);
+  await ensureAutonomyControlSchema(env);
+  const [status, control, money, replyProcessingAvailable] = await Promise.all([
+    revenueAutopilotStatus(env),
+    autonomyControlStatus(env),
+    revenueMoneyMetrics(env),
+    gmailReadAvailable(env)
+  ]);
+  return json({
+    ...status,
+    ...control,
+    ...money,
+    replyProcessingAvailable,
+    revenueMode: replyProcessingAvailable ? 'CONTROLLED_AUTONOMY' : 'SAFE_HOLD_NO_NEW_OUTREACH'
+  }, 200, cors);
+}
+
+async function handleCheckoutRedirect(request, env) {
+  const url = new URL(request.url);
+  const target = await resolveCheckoutRedirect(env, url.searchParams.get('t'));
+  if (!target) return new Response('Checkout not found', {
+    status: 404,
+    headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }
+  });
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: target,
+      'Cache-Control': 'no-store',
+      'Referrer-Policy': 'no-referrer'
+    }
+  });
 }
 
 export default {
@@ -250,17 +343,29 @@ export default {
       return handleStripeWebhook(request, env);
     }
 
+    if (request.method === 'OPTIONS' && url.pathname === '/v1/autopilot/kill-switch') {
+      const cors = corsHeaders(request, env);
+      if (!cors['Access-Control-Allow-Origin']) return new Response(null, { status: 403 });
+      return new Response(null, { status: 204, headers: cors });
+    }
+
+    if (request.method === 'GET' && url.pathname === '/v1/checkout') {
+      return handleCheckoutRedirect(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/autopilot/kill-switch') {
+      return handleKillSwitch(request, env);
+    }
+
     if (request.method === 'GET' && url.pathname === '/v1/autopilot/status') {
       try {
-        const status = await revenueAutopilotStatus(env);
-        const replyProcessingAvailable = await gmailReadAvailable(env);
-        return json({
-          ...status,
-          replyProcessingAvailable,
-          revenueMode: replyProcessingAvailable ? 'FULL' : 'DIRECT_CASE_CHECK_FALLBACK'
-        });
+        return await handleAutopilotStatus(request, env);
       } catch (error) {
-        return json({ enabled: false, stage: 'ERROR', error: String(error?.message || 'AUTOPILOT_STATUS_FAILED') }, 503);
+        return json(
+          { enabled: false, stage: 'ERROR', error: String(error?.message || 'AUTOPILOT_STATUS_FAILED') },
+          503,
+          corsHeaders(request, env)
+        );
       }
     }
 
