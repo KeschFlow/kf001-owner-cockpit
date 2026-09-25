@@ -266,9 +266,7 @@ async function runAutonomySidecar(env) {
     const economicSelection = await selectBestEconomicCandidate(env);
     const safetyAfterSelection = await enforcePendingCaseSafety(env);
     const replyProcessingAvailable = await gmailReadAvailable(env);
-    const revenueAutopilot = replyProcessingAvailable
-      ? await runRevenueAutopilot(env)
-      : await runDirectRevenueFallback(env);
+    const revenueAutopilot = await runRevenueAutopilot(env, { replyMonitoringAvailable: replyProcessingAvailable });
     return {
       ok: true,
       safetyBeforeSelection,
@@ -314,7 +312,7 @@ async function handleAutopilotStatus(request, env) {
     ...control,
     ...money,
     replyProcessingAvailable,
-    revenueMode: replyProcessingAvailable ? 'CONTROLLED_AUTONOMY' : 'SAFE_HOLD_NO_NEW_OUTREACH'
+    revenueMode: replyProcessingAvailable ? 'CONTROLLED_AUTONOMY' : 'CONTROLLED_SEND_ONLY_NO_FOLLOWUP'
   }, 200, cors);
 }
 
