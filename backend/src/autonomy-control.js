@@ -34,7 +34,9 @@ async function sha256Hex(value) {
 }
 
 async function addMissingColumn(env, table, column, definition) {
-  const info = await env.CASE_DB.prepare(`PRAGMA table_info(${table})`).all();
+  const statement = env.CASE_DB.prepare(`PRAGMA table_info(${table})`);
+  if (!statement || typeof statement.all !== 'function') return;
+  const info = await statement.all();
   const names = new Set((info.results || []).map((row) => String(row.name || '')));
   if (!names.has(column)) {
     await env.CASE_DB.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
