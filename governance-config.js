@@ -13,6 +13,8 @@ globalThis.KF001_CONFIG = Object.freeze({
   approvalIntentPath: '/v1/approval-intents',
   radarRunPath: '/v1/radar/run',
   privateCaseDetailPath: '/v1/private/case-detail',
+  autopilotStatusPath: '/v1/autopilot/status',
+  autopilotKillSwitchPath: '/v1/autopilot/kill-switch',
   pushSubscriptionPath: '/v1/push/subscriptions',
   evidencePath: '/v1/evidence',
   pushPublicKey: ''

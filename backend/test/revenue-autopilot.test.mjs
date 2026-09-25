@@ -20,11 +20,11 @@ test('revenue autopilot sends only a hard-qualified current winner and caps new 
   assert.match(autopilot, /e\.evidence_score >= 55/);
   assert.match(autopilot, /e\.effort_score <= 70/);
   assert.match(autopilot, /e\.uncertainty_score <= 55/);
-  assert.match(autopilot, /find\(autoContactAllowed\)/);
+  assert.match(autopilot, /hardAutoApproveRules\(row, env\)\.approved/);
   assert.match(autopilot, /LIMIT 20/);
   assert.match(autopilot, /AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY/);
   assert.match(autopilot, /AUTO_CONTACT_NOT_VERIFIED_PUBLIC/);
-  assert.match(autopilot, /AUTOPILOT_OUTREACH_SENT/);
+  assert.match(autopilot, /CASE_CHECK_OFFER_SENT/);
 });
 
 test('open customers are monitored in a bounded set without blocking daily acquisition', () => {
@@ -115,34 +115,31 @@ test('reached daily quota still monitors all open cases and sends no outreach', 
   assert.equal(result.action, 'DAILY_OUTREACH_CAP_REACHED');
 });
 
-test('two immediate cycles preserve outreach, checkout, and reply idempotency', async () => {
-  let quotaSent = 0;
+test('borderline case-check candidates remain pending for owner review and never consume outreach quota', async () => {
   let outreach = 0;
   let checkout = 0;
   let replies = 0;
   let inboundPending = true;
   const operations = cycleOperations({
-    openCases: [{ public_case_id: 'CASE-A', stage: 'TERMS_SENT' }],
+    openCases: [{ public_case_id: 'CASE-A', stage: 'RESPONSE_REVIEW' }],
     monitor: async (_, record) => {
-      if (inboundPending) { inboundPending = false; replies += 1; return { ok: true, action: 'ENGAGED', caseId: record.public_case_id }; }
+      if (inboundPending) { inboundPending = false; replies += 1; return { ok: true, action: 'OWNER_ATTENTION_REQUIRED', caseId: record.public_case_id }; }
       return { ok: true, action: 'WAITING_FOR_REPLY', caseId: record.public_case_id };
     },
-    sendCaseCheck: async (_, row) => {
-      quotaSent += 1;
+    sendCaseCheck: async () => {
       checkout += 1;
       outreach += 1;
-      return { ok: true, action: 'CASE_CHECK_OFFER_SENT', caseId: row.public_case_id };
+      return { ok: true, action: 'CASE_CHECK_OFFER_SENT' };
     }
   });
-  operations.dailyQuotaStatus = async () => ({ day: '2026-08-22', max: 1, sentCount: quotaSent, available: quotaSent < 1 });
   operations.currentWinner = async () => null;
   operations.currentCaseCheckCandidate = async () => ({ public_case_id: 'CASE-B' });
   const first = await REVENUE_AUTOPILOT_INTERNALS.runAutopilotCycle({}, operations);
   const second = await REVENUE_AUTOPILOT_INTERNALS.runAutopilotCycle({}, operations);
-  assert.equal(first.action, 'CASE_CHECK_OFFER_SENT');
-  assert.equal(second.action, 'DAILY_OUTREACH_CAP_REACHED');
-  assert.equal(outreach, 1);
-  assert.equal(checkout, 1);
+  assert.equal(first.action, 'PENDING_OWNER_REVIEW');
+  assert.equal(second.action, 'PENDING_OWNER_REVIEW');
+  assert.equal(outreach, 0);
+  assert.equal(checkout, 0);
   assert.equal(replies, 1);
 });
 
@@ -175,11 +172,12 @@ test('duplicate open rows are monitored at most once per cycle', async () => {
   assert.equal(result.monitoring.attempted, 1);
 });
 
-test('positive reply moves to explicit engagement terms before evidence intake', () => {
-  assert.match(autopilot, /reply exactly: I AGREE/);
-  assert.match(autopilot, /stage = 'TERMS_SENT'/);
-  assert.match(autopilot, /stage = 'ENGAGED'/);
-  assert.match(autopilot, /evidenceChecklistMessage/);
+test('all non-negative replies stop automation and require owner attention', () => {
+  assert.match(autopilot, /stage = 'RESPONSE_REVIEW'/);
+  assert.match(autopilot, /OWNER_ATTENTION_REQUIRED/);
+  assert.match(autopilot, /INBOUND_REQUIRES_OWNER/);
+  assert.match(autopilot, /RECIPIENT_OPT_OUT/);
+  assert.match(autopilot, /suppressRecipient/);
 });
 
 test('cancelled or voided documented value is recognized as a successful outcome', () => {
@@ -193,17 +191,17 @@ test('cancelled or voided documented value is recognized as a successful outcome
   );
 });
 
-test('success fee is calculated server-side and only requested through an individual Stripe Checkout', () => {
-  assert.match(autopilot, /recovered < minValue/);
+test('legacy success-fee settlement remains server-side while initial autonomous acquisition uses case-check Checkout', () => {
   assert.match(autopilot, /createSuccessFeeCheckoutSession/);
+  assert.match(autopilot, /createCaseCheckCheckoutSession/);
   assert.match(autopilot, /stripe_checkout_session_id/);
-  assert.match(autopilot, /stage = 'PAYMENT_PENDING'/);
+  assert.match(autopilot, /CASE_CHECK_PAYMENT_PENDING/);
   assert.doesNotMatch(autopilot, /env\.PAYMENT_LINK/);
   assert.doesNotMatch(autopilot, /fixed success fee/i);
 });
 
 test('worker v3 runs the revenue autopilot only inside the isolated sidecar', () => {
-  assert.match(workerV3, /runRevenueAutopilot\(env\)/);
+  assert.match(workerV3, /runRevenueAutopilot\(env, \{ replyMonitoringAvailable: replyProcessingAvailable \}\)/);
   assert.match(workerV3, /ctx\.waitUntil\(runAutonomySidecar\(env\)\)/);
 });
 
@@ -216,6 +214,9 @@ test('gmail module supports thread reads and replies for reply monitoring', () =
 test('production config enables the capped dynamic success-fee model', () => {
   assert.match(wrangler, /REVENUE_AUTOPILOT_ENABLED = "true"/);
   assert.match(wrangler, /AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY = "1"/);
+  assert.match(wrangler, /AUTOPILOT_AUTO_APPROVE_ENABLED = "true"/);
+  assert.match(wrangler, /AUTOPILOT_FOLLOWUP_HOURS = "12"/);
+  assert.match(wrangler, /AUTOPILOT_MAX_CONTACTS_PER_CASE = "2"/);
   assert.match(wrangler, /SUCCESS_FEE_PERCENT = "10"/);
   assert.match(wrangler, /SUCCESS_FEE_MIN_EUR = "750"/);
   assert.match(wrangler, /SUCCESS_FEE_MAX_EUR = "5000"/);

@@ -19,8 +19,8 @@ const CASE_CHECK_FIXTURE = Object.freeze({
   platform: 'github',
   sourceUrl: 'https://github.com/example/project/issues/42',
   title: 'Business account reports unresolved platform auto-charge discrepancy',
-  rawDescription: 'A company developer documents USD 860 in disputed unexpected platform charges and an unexplained account balance. The public report includes invoices, screenshots, transaction dates, billing records, a support case ID and a detailed support timeline. The chronology starts on 2026-07-14, links the public supporting record at https://example.com/public-billing-record, and records each response supplied to billing support. The company requested a refund and supplied the requested records, but the issue remains unresolved after repeated billing support contact with no response. The business account owner requests a clear escalation route and identifies the account, invoice and affected payment period.',
-  claimAmountUsd: 860,
+  rawDescription: 'A company developer documents USD 12,000 in disputed unexpected platform charges and an unexplained account balance. The public report includes invoices, screenshots, transaction dates, billing records, a support case ID and a detailed support timeline. The chronology starts on 2026-07-14, links the public supporting record at https://example.com/public-billing-record, and records each response supplied to billing support. The company requested a refund and supplied the requested records, but the issue remains unresolved after repeated billing support contact with no response. The business account owner requests a clear escalation route and identifies the account, invoice and affected payment period.',
+  claimAmountUsd: 12000,
   authorName: 'Business Account Owner',
   contactEmail: 'billing@company.example',
   contactRoute: 'PUBLIC_POST_EMAIL'
@@ -101,6 +101,27 @@ class SqliteD1 {
   }
 }
 
+function applyAllMigrations(db) {
+  for (const name of [
+    '0001_initial.sql',
+    '0002_owner_webauthn.sql',
+    '0003_gmail_dispatch.sql',
+    '0004_real_radar.sql',
+    '0005_radar_provenance.sql',
+    '0006_retire_legacy_test_case.sql',
+    '0007_dispatch_hardening.sql',
+    '0008_economic_selection.sql',
+    '0009_release_terminal_owner_gate.sql',
+    '0010_revenue_autopilot.sql',
+    '0011_dynamic_success_fee_checkout.sql',
+    '0012_case_check_offer.sql',
+    '0013_state_events_audit_context.sql',
+    '0014_controlled_autonomy.sql'
+  ]) {
+    db.execMigration(name);
+  }
+}
+
 function intakeRequest() {
   return new Request('https://worker.test/v1/radar/intake', {
     method: 'POST',
@@ -145,7 +166,8 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
     '0010_revenue_autopilot.sql',
     '0011_dynamic_success_fee_checkout.sql',
     '0012_case_check_offer.sql',
-    '0013_state_events_audit_context.sql'
+    '0013_state_events_audit_context.sql',
+    '0014_controlled_autonomy.sql'
   ]) {
     db.execMigration(name);
   }
@@ -192,11 +214,17 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
     CASE_DB: db,
     RADAR_INGEST_TOKEN: 'UNIT_TEST_ONLY',
     REVENUE_AUTOPILOT_ENABLED: 'true',
+    AUTOPILOT_AUTO_APPROVE_ENABLED: 'true',
+    AUTOPILOT_MIN_ECONOMIC_SCORE: '72',
+    AUTOPILOT_MIN_VALUE_USD: '8000',
     CASE_CHECK_ENABLED: 'true',
     CASE_CHECK_MIN_ECONOMIC_SCORE: '58',
     CASE_CHECK_MIN_VALUE_USD: '500',
     CASE_CHECK_PRICE_EUR: '49',
     AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY: '1',
+    AUTOPILOT_FOLLOWUP_HOURS: '12',
+    AUTOPILOT_MAX_CONTACTS_PER_CASE: '2',
+    PUBLIC_WORKER_URL: 'https://worker.test',
     GMAIL_CLIENT_ID: 'unit-test-client-id',
     GMAIL_CLIENT_SECRET: 'unit-test-client-secret',
     GMAIL_REFRESH_TOKEN: 'unit-test-refresh-token',
@@ -218,8 +246,8 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
   const firstBody = await firstIntake.json();
   assert.equal(firstIntake.status, 201);
   assert.equal(firstBody.intake.publicCaseId, CASE_ID);
-  assert.equal(firstBody.economicSelection.reason, 'ECONOMIC_CASE_CHECK_SELECTED');
-  assert.equal(firstBody.economicSelection.selectionTier, 'CASE_CHECK_49');
+  assert.equal(firstBody.economicSelection.reason, 'ECONOMIC_WINNER_SELECTED');
+  assert.equal(firstBody.economicSelection.selectionTier, 'SUCCESS_FEE');
 
   const initialCase = db.get('SELECT * FROM cases WHERE public_case_id = ?', CASE_ID);
   assert.equal(initialCase.status, 'PENDING_APPROVAL');
@@ -263,6 +291,17 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
   assert.equal(pending.offer_type, 'CASE_CHECK_49');
   assert.equal(pending.stripe_checkout_session_id, CHECKOUT_ID);
   assert.equal(pending.fixed_offer_amount_cents, 4900);
+  assert.match(String(pending.checkout_public_token || ''), /^[a-f0-9-]{32,64}$/i);
+
+  const checkoutRedirect = await worker.fetch(
+    new Request(`https://worker.test/v1/checkout?t=${pending.checkout_public_token}`),
+    env,
+    { waitUntil() {} }
+  );
+  assert.equal(checkoutRedirect.status, 302);
+  assert.equal(checkoutRedirect.headers.get('Location'), `https://checkout.stripe.com/c/pay/${CHECKOUT_ID}`);
+  assert.equal(db.get('SELECT checkout_view_count FROM revenue_autopilot WHERE public_case_id = ?', CASE_ID).checkout_view_count, 1);
+
   assert.equal(db.get('SELECT status FROM cases WHERE public_case_id = ?', CASE_ID).status, 'DISPATCHED');
   assert.equal(db.get('SELECT COUNT(*) AS count FROM revenue_autopilot WHERE public_case_id = ?', CASE_ID).count, 1);
   assert.equal(db.get('SELECT COUNT(*) AS count FROM dispatch_log WHERE public_case_id = ?', CASE_ID).count, 1);
@@ -322,7 +361,7 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
     event_type, state, source, previous_state, actor_ref, request_key
   }) => ({ event_type, state, source, previous_state, actor_ref, request_key })), [
     {
-      event_type: 'ECONOMIC_CASE_CHECK_SELECTED',
+      event_type: 'ECONOMIC_WINNER_SELECTED',
       state: 'PENDING_APPROVAL',
       source: 'ECONOMIC_SELECTOR_V1',
       previous_state: null,
@@ -330,10 +369,18 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
       request_key: 'GH:EXT-CASE-CHECK-001'
     },
     {
+      event_type: 'AUTONOMY_AUTO_APPROVED',
+      state: 'APPROVED_PENDING_DISPATCH',
+      source: 'AUTONOMY_CONTROL_V1',
+      previous_state: 'PENDING_APPROVAL',
+      actor_ref: 'AUTONOMY_CONTROL_V1',
+      request_key: `kf001-case-check-${CASE_ID}-v1`
+    },
+    {
       event_type: 'CASE_CHECK_OFFER_SENT',
       state: 'PAYMENT_PENDING',
       source: 'REVENUE_AUTOPILOT',
-      previous_state: 'CONTACT_CLAIMED',
+      previous_state: 'APPROVED_PENDING_DISPATCH',
       actor_ref: 'REVENUE_AUTOPILOT',
       request_key: `kf001-case-check-${CASE_ID}-v1`
     },
@@ -353,6 +400,121 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
   assert.deepEqual(await duplicateWebhook.json(), { ok: true, received: true, duplicate: true });
   assert.equal(db.get('SELECT COUNT(*) AS count FROM stripe_payments WHERE event_id = ?', PAYMENT_EVENT_ID).count, 1);
   assert.equal(db.get('SELECT COUNT(*) AS count FROM stripe_webhook_events WHERE event_id = ?', PAYMENT_EVENT_ID).count, 1);
-  assert.equal(db.get('SELECT COUNT(*) AS count FROM state_events WHERE public_case_id = ?', CASE_ID).count, 3);
+  assert.equal(db.get('SELECT COUNT(*) AS count FROM state_events WHERE public_case_id = ?', CASE_ID).count, 4);
+  assert.equal(db.get('SELECT COUNT(*) AS count FROM autonomy_audit_log WHERE public_case_id = ?', CASE_ID).count >= 3, true);
   assert.equal(db.get('SELECT COUNT(*) AS count FROM dispatch_log WHERE public_case_id = ?', CASE_ID).count, 1);
+});
+
+
+test('global kill switch blocks a hard-qualified case before Gmail outreach', async (t) => {
+  const db = new SqliteD1();
+  t.after(() => db.close());
+  applyAllMigrations(db);
+
+  let stripeCalls = 0;
+  let gmailSends = 0;
+  t.mock.method(globalThis, 'fetch', async (input) => {
+    const url = String(input);
+    if (url === 'https://api.stripe.com/v1/checkout/sessions') {
+      stripeCalls += 1;
+      return new Response(JSON.stringify({
+        id: 'cs_test_kill_switch',
+        url: 'https://checkout.stripe.com/c/pay/cs_test_kill_switch',
+        amount_total: 4900,
+        currency: 'eur',
+        expires_at: Math.floor(Date.now() / 1000) + 3600
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (url === 'https://oauth2.googleapis.com/token') {
+      return new Response(JSON.stringify({ access_token: 'unit-test-access-token' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    if (url === 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send') {
+      gmailSends += 1;
+      return new Response(JSON.stringify({ id: 'SHOULD_NOT_SEND', threadId: 'SHOULD_NOT_SEND' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    throw new Error(`Unexpected network call: ${url}`);
+  });
+
+  const env = {
+    CASE_DB: db,
+    RADAR_INGEST_TOKEN: 'UNIT_TEST_ONLY',
+    REVENUE_AUTOPILOT_ENABLED: 'true',
+    AUTOPILOT_AUTO_APPROVE_ENABLED: 'true',
+    AUTOPILOT_MIN_ECONOMIC_SCORE: '72',
+    AUTOPILOT_MIN_VALUE_USD: '8000',
+    CASE_CHECK_ENABLED: 'true',
+    CASE_CHECK_MIN_ECONOMIC_SCORE: '58',
+    CASE_CHECK_MIN_VALUE_USD: '500',
+    CASE_CHECK_PRICE_EUR: '49',
+    AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY: '1',
+    AUTOPILOT_FOLLOWUP_HOURS: '12',
+    AUTOPILOT_MAX_CONTACTS_PER_CASE: '2',
+    PUBLIC_WORKER_URL: 'https://worker.test',
+    GMAIL_CLIENT_ID: 'unit-test-client-id',
+    GMAIL_CLIENT_SECRET: 'unit-test-client-secret',
+    GMAIL_REFRESH_TOKEN: 'unit-test-refresh-token',
+    GMAIL_FROM: 'owner@example.test',
+    STRIPE_SECRET_KEY: 'unit-test-stripe-key',
+    STRIPE_SUCCESS_URL: 'https://example.test/payment/success',
+    STRIPE_CANCEL_URL: 'https://example.test/payment/cancel'
+  };
+
+  const seededAt = new Date().toISOString();
+  db.sqlite.prepare(`
+    INSERT INTO radar_candidates (
+      source, external_id, public_case_id, source_url, source_title, source_excerpt,
+      author_login, author_name, contact_email, contact_route,
+      impact_score, evidence_score, case_value_score, amount_signal,
+      status, first_seen_at, last_seen_at, promoted_at
+    ) VALUES (
+      'GH', 'EXT-KILL-001', ?, 'https://github.com/example/project/issues/kill',
+      'Unresolved business billing dispute', 'USD 12000 unexpected platform charge with invoices, support case and no response.',
+      'business-owner', 'Business Owner', 'billing@company.example', 'PUBLIC_POST_EMAIL',
+      90, 80, 85, 12000, 'PROMOTED', ?, ?, ?
+    )
+  `).run(CASE_ID, seededAt, seededAt, seededAt);
+  db.sqlite.prepare(`
+    INSERT INTO cases (
+      public_case_id, case_value_score, outreach_ready, impact_class, evidence_quality,
+      recommendation, outreach_message, status, version, is_active, updated_at
+    ) VALUES (?, 85, 1, 'KRITISCH', 'STARK', 'APPROVE OUTREACH', 'Prepared', 'PENDING_APPROVAL', 1, 1, ?)
+  `).run(CASE_ID, seededAt);
+  db.sqlite.prepare(`
+    INSERT INTO dispatch_targets (public_case_id, recipient_email, recipient_name, subject, updated_at)
+    VALUES (?, 'billing@company.example', 'Business Owner', 'Platform/Billing Case Check', ?)
+  `).run(CASE_ID, seededAt);
+  db.sqlite.prepare(`
+    INSERT INTO case_economic_scores (
+      public_case_id, economic_score, economically_qualified, solvability_score,
+      payer_probability_score, reachability_score, evidence_score, platform_ack_score,
+      recoverable_value_score, effort_score, uncertainty_score, proprietary_data_value_score,
+      reference_value_score, amount_currency, amount_native, amount_approx_usd,
+      scoring_version, selected_at, updated_at
+    ) VALUES (?, 88, 1, 82, 75, 85, 80, 65, 90, 35, 25, 70, 65, 'USD', 12000, 12000, 'ECON_V1', ?, ?)
+  `).run(CASE_ID, seededAt, seededAt);
+
+  db.sqlite.prepare(`
+    UPDATE autonomy_control
+       SET outreach_enabled = 0, updated_by = 'TEST_KILL', updated_at = CURRENT_TIMESTAMP
+     WHERE id = 1
+  `).run();
+
+  const cycle = await runRevenueAutopilot(env, { replyMonitoringAvailable: false });
+  assert.equal(cycle.action, 'PENDING_OWNER_REVIEW');
+  assert.equal(cycle.acquisition.reasons.includes('GLOBAL_KILL_SWITCH'), true);
+  assert.equal(stripeCalls, 1);
+  assert.equal(gmailSends, 0);
+  assert.equal(db.get('SELECT COUNT(*) AS count FROM dispatch_log WHERE public_case_id = ?', CASE_ID).count, 0);
+  assert.equal(db.get('SELECT status FROM cases WHERE public_case_id = ?', CASE_ID).status, 'PENDING_APPROVAL');
+  assert.equal(db.get('SELECT sent_count FROM revenue_autopilot_quota LIMIT 1')?.sent_count || 0, 0);
+  assert.equal(
+    db.get("SELECT COUNT(*) AS count FROM autonomy_audit_log WHERE public_case_id = ? AND event_type = 'OUTREACH_PREFLIGHT_BLOCKED'", CASE_ID).count,
+    1
+  );
 });

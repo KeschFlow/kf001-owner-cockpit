@@ -116,7 +116,8 @@ async function economicApprovalQualification(env, caseId) {
      WHERE public_case_id = ?1
   `).bind(caseId).first();
   return {
-    allowed: economicRowIsApprovalQualified(row),
+    allowed: economicRowIsSelectedRevenueCandidate(row, env),
+    autoQualified: economicRowIsApprovalQualified(row),
     row
   };
 }
@@ -288,6 +289,7 @@ async function hardGateApprovalRequest(request, env) {
       caseId,
       economicScore: Number(qualification.row?.economic_score || 0),
       economicallyQualified: Number(qualification.row?.economically_qualified || 0) === 1,
+      ownerReviewEligible: Boolean(qualification.allowed),
       scoringVersion: qualification.row?.scoring_version || null,
       selectedAt: qualification.row?.selected_at || null
     }, 409, corsHeaders(request, env));

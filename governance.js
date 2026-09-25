@@ -75,6 +75,7 @@ function renderOwnerAuth() {
   const ticketAvailable = Boolean(ownerAuth?.enrollmentTicket);
   const connected = Boolean(ownerAuth?.connected);
   section.className = 'bg-slate-800/80 p-4 rounded-2xl border border-indigo-500/30 shadow-sm space-y-3';
+  section.dataset.ownerVerified = ownerAuthState.verified ? 'true' : 'false';
   section.innerHTML = `
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div><h3 class="font-extrabold text-white text-sm">Owner Passkey</h3>
@@ -83,9 +84,9 @@ function renderOwnerAuth() {
     </div>
     <div class="flex flex-wrap gap-2">
       ${!ownerAuthState.enrolled && ticketAvailable ? '<button id="registerPasskeyBtn" class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold">🔐 Owner-Passkey registrieren</button>' : ''}
-      ${ownerAuthState.enrolled ? '<button id="verifyPasskeyBtn" class="px-3 py-2 rounded-lg bg-slate-950 border border-indigo-500/40 text-indigo-200 text-xs font-bold">Passkey prüfen</button>' : ''}
+      ${ownerAuthState.enrolled && !ownerAuthState.verified ? '<button id="verifyPasskeyBtn" class="px-3 py-2 rounded-lg bg-slate-950 border border-indigo-500/40 text-indigo-200 text-xs font-bold">Passkey prüfen</button>' : ''}
     </div>
-    <p id="ownerAuthResult" class="text-[10px] ${connected ? 'text-slate-400' : 'text-rose-300'}">${connected ? (ticketAvailable && !ownerAuthState.enrolled ? 'Enrollment-Ticket erkannt. Registrierung kann gestartet werden.' : `Credentials: ${ownerAuthState.credentialCount || 0}`) : 'OWNER_AUTH_NOT_CONNECTED'}</p>`;
+    <p id="ownerAuthResult" class="text-[10px] ${connected ? 'text-slate-400' : 'text-rose-300'}">${connected ? (ownerAuthState.verified ? 'Passkey erfolgreich geprüft.' : (ticketAvailable && !ownerAuthState.enrolled ? 'Enrollment-Ticket erkannt. Registrierung kann gestartet werden.' : `Credentials: ${ownerAuthState.credentialCount || 0}`)) : 'OWNER_AUTH_NOT_CONNECTED'}</p>`;
 
   document.getElementById('registerPasskeyBtn')?.addEventListener('click', registerOwnerPasskey);
   document.getElementById('verifyPasskeyBtn')?.addEventListener('click', verifyOwnerPasskey);
@@ -113,8 +114,14 @@ async function verifyOwnerPasskey() {
     output.textContent = 'Passkey-Prüfung läuft …';
     const result = await ownerAuth.verify();
     ownerAuthState = { ...ownerAuthState, ...result };
-    output.textContent = result.verified ? 'Passkey erfolgreich geprüft.' : 'Passkey-Prüfung fehlgeschlagen.';
+    renderOwnerAuth();
     renderSystemStatus();
+    renderOwnerGate();
+    const refreshed = document.getElementById('ownerAuthResult');
+    if (refreshed) refreshed.textContent = result.verified ? 'Passkey erfolgreich geprüft.' : 'Passkey-Prüfung fehlgeschlagen.';
+    if (result.verified) {
+      globalThis.dispatchEvent(new CustomEvent('kf001:owner-verified'));
+    }
   } catch (error) {
     output.textContent = `Passkey-Prüfung fehlgeschlagen: ${error.message}`;
   }
