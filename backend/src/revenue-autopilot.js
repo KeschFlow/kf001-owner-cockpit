@@ -1185,16 +1185,31 @@ async function monitorOpenCases(env, records, monitor = monitorOpenCase) {
 
 async function acquireDailyCandidate(env, operations = {}) {
   const quotaStatus = operations.dailyQuotaStatus || dailyQuotaStatus;
+  const selectOwnerApproved = operations.currentOwnerApprovedCase || currentOwnerApprovedCase;
   const selectWinner = operations.currentWinner || currentWinner;
   const sendWinner = operations.sendInitialOutreach || sendCaseCheckOffer;
   const selectCaseCheck = operations.currentCaseCheckCandidate || currentCaseCheckCandidate;
   const sendCaseCheck = operations.sendCaseCheckOffer || sendCaseCheckOffer;
+  const replyMonitoringAvailable = operations.replyMonitoringAvailable !== false;
 
   const quota = await quotaStatus(env);
   if (!quota.available) return { ok: true, action: 'DAILY_OUTREACH_CAP_REACHED', quota };
 
+  const ownerApproved = await selectOwnerApproved(env);
+  if (ownerApproved) {
+    return {
+      ...(await sendCaseCheck(env, ownerApproved, { replyMonitoringAvailable, manualApproved: true })),
+      quota
+    };
+  }
+
   const winner = await selectWinner(env);
-  if (winner) return { ...(await sendWinner(env, winner, { replyMonitoringAvailable: true })), quota };
+  if (winner) {
+    return {
+      ...(await sendWinner(env, winner, { replyMonitoringAvailable, manualApproved: false })),
+      quota
+    };
+  }
 
   const caseCheckCandidate = await selectCaseCheck(env);
   if (caseCheckCandidate) {
@@ -1250,7 +1265,7 @@ export async function revenueAutopilotStatus(env) {
     : { ...common, stage: 'IDLE', paymentStatus: null };
 }
 
-export async function runRevenueAutopilot(env) {
+export async function runRevenueAutopilot(env, { replyMonitoringAvailable = true } = {}) {
   await ensureRevenueAutopilotSchema(env);
   await ensureAutonomyControlSchema(env);
   if (!enabled(env)) return { ok: true, enabled: false, action: 'DISABLED' };
@@ -1258,7 +1273,10 @@ export async function runRevenueAutopilot(env) {
   const token = await acquireLock(env);
   if (!token) return { ok: true, enabled: true, action: 'BUSY' };
   try {
-    return await runAutopilotCycle(env);
+    const operations = replyMonitoringAvailable
+      ? { replyMonitoringAvailable: true }
+      : { replyMonitoringAvailable: false, openAutopilotCases: async () => [] };
+    return await runAutopilotCycle(env, operations);
   } finally {
     await releaseLock(env, token).catch(() => {});
   }
