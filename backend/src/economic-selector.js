@@ -13,8 +13,35 @@ function numericEnv(env, key, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function isPlaceholderContact(value) {
+  const email = String(value || '').trim().toLowerCase();
+  const domain = email.split('@')[1] || '';
+  return Boolean(domain) && (
+    domain === 'example.com' ||
+    domain === 'example.net' ||
+    domain === 'example.org' ||
+    domain.endsWith('.example') ||
+    /(^|[.-])example([.-]|$)/.test(domain)
+  );
+}
+
+function isEditorialOrSettlementContent(text) {
+  const source = String(text || '').toLowerCase();
+  return [
+    /class[- ]action/,
+    /data breach settlement/,
+    /how to claim/,
+    /claim up to/,
+    /listing page/,
+    /article title/,
+    /short blurb/,
+    /affiliate/
+  ].some((pattern) => pattern.test(source));
+}
+
 export function caseCheckEligible(score, env = {}) {
   if (String(env.CASE_CHECK_ENABLED || '').toLowerCase() !== 'true') return false;
+  if (score?.leadQualified === false) return false;
   return Number(score?.economicScore || 0) >= numericEnv(env, 'CASE_CHECK_MIN_ECONOMIC_SCORE', DEFAULT_CASE_CHECK_MIN_SCORE)
     && Number(score?.amountApproxUsd || 0) >= numericEnv(env, 'CASE_CHECK_MIN_VALUE_USD', DEFAULT_CASE_CHECK_MIN_VALUE_USD)
     && Number(score?.solvability || 0) >= 50
@@ -96,6 +123,9 @@ export function scoreEconomicCandidate(row) {
   const text = `${title}\n${excerpt}`.toLowerCase();
   const evidence = clamp(Number(row.evidence_score || 0));
   const amount = extractEconomicAmount(`${title}\n${excerpt}`, row.amount_signal);
+  const editorialOrSettlement = isEditorialOrSettlementContent(text);
+  const placeholderContact = isPlaceholderContact(row.contact_email);
+  const leadQualified = !editorialOrSettlement && !placeholderContact;
 
   const platformAck = signalScore(text, [
     [/refund (?:was )?approved|approved refund|refund approval/, 40],
@@ -192,7 +222,8 @@ export function scoreEconomicCandidate(row) {
     (100 - uncertainty) * 0.02
   ));
 
-  const economicallyQualified = economicScore >= MIN_ECONOMIC_SCORE
+  const economicallyQualified = leadQualified
+    && economicScore >= MIN_ECONOMIC_SCORE
     && solvability >= 60
     && reachability >= 60
     && evidence >= 50
@@ -201,6 +232,8 @@ export function scoreEconomicCandidate(row) {
   return {
     economicScore,
     economicallyQualified,
+    leadQualified,
+    rejectionReason: editorialOrSettlement ? 'NON_CUSTOMER_CONTENT' : placeholderContact ? 'PLACEHOLDER_CONTACT' : null,
     solvability,
     payerProbability,
     reachability,
@@ -271,7 +304,7 @@ async function persistScore(env, caseId, score, selectedAt = null) {
       amount_native = excluded.amount_native,
       amount_approx_usd = excluded.amount_approx_usd,
       scoring_version = excluded.scoring_version,
-      selected_at = COALESCE(excluded.selected_at, case_economic_scores.selected_at),
+      selected_at = excluded.selected_at,
       updated_at = excluded.updated_at
   `).bind(
     caseId,
