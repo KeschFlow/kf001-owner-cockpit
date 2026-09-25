@@ -305,7 +305,12 @@ async function handleApprovalIntent(request, env) {
   `).bind(intent.caseId, newStatus, now).run();
 
   let dispatch = { executed: false };
-  if (intent.decision === 'APPROVE') dispatch = await executeDispatch(env, intent.caseId, expectedVersion + 1);
+  const controlledOutreach = String(env.CONTROLLED_OUTREACH_ENABLED || '').toLowerCase() === 'true';
+  if (intent.decision === 'APPROVE') {
+    dispatch = controlledOutreach
+      ? { executed: false, provider: 'CONTROLLED_PIPELINE', deferred: true }
+      : await executeDispatch(env, intent.caseId, expectedVersion + 1);
+  }
 
   const state = await readOwnerState(env);
   return json({
@@ -314,6 +319,7 @@ async function handleApprovalIntent(request, env) {
     stateSource: 'D1',
     dispatchExecuted: dispatch.executed,
     dispatchProvider: dispatch.provider || null,
+    dispatchDeferred: Boolean(dispatch.deferred),
     dispatchError: dispatch.error || null
   }, 200);
 }
