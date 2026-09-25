@@ -24,7 +24,7 @@ test('revenue autopilot sends only a hard-qualified current winner and caps new 
   assert.match(autopilot, /LIMIT 20/);
   assert.match(autopilot, /AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY/);
   assert.match(autopilot, /AUTO_CONTACT_NOT_VERIFIED_PUBLIC/);
-  assert.match(autopilot, /AUTOPILOT_OUTREACH_SENT/);
+  assert.match(autopilot, /CASE_CHECK_OFFER_SENT/);
 });
 
 test('open customers are monitored in a bounded set without blocking daily acquisition', () => {
