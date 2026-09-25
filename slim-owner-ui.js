@@ -32,7 +32,7 @@
       #kfSlimOwner #preparedGovernanceSystems,
       #kfSlimOwner #radarControlPanel,
       #kfSlimOwner #radarResultsPanel { display:none !important; }
-      #kfSlimOwner #ownerGateContainer > .grid,
+      #kfSlimOwner #ownerGateContainer > .grid:not(#gateActionButtons),
       #kfSlimOwner #ownerGateContainer > .p-3.bg-slate-950\\/80 { display:none !important; }
       #kfSlimOwner #ownerGateContainer { padding:16px !important; margin:0 !important; }
       #kfSlimOwner #gateTruth { font-size:11px !important; }
