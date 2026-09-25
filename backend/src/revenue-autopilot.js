@@ -1,4 +1,12 @@
-import { getGmailThread, gmailConfigured, sendGmail, sendGmailReply } from './gmail.js';
+import { getGmailThread, gmailConfigured, sendGmailReply } from './gmail.js';
+import {
+  appendAutonomyAudit,
+  ensureAutonomyControlSchema,
+  hardAutoApproveRules,
+  publicCheckoutTrackingUrl,
+  safeOutreachPreflight,
+  suppressRecipient
+} from './autonomy-control.js';
 import {
   calculateSuccessFee,
   createCaseCheckCheckoutSession,
@@ -212,7 +220,21 @@ function caseCheckMessage(row, checkoutUrl, amountEur) {
     '',
     'After payment, reply to this email with the invoices, support case IDs, key messages, important dates and desired outcome. Do not send credentials.',
     '',
-    'If this is resolved or not relevant, reply NO and I will close the case. No unsolicited follow-up will be sent.',
+    'If this is resolved or not relevant, reply NO and I will close the case. If there is no reply or payment, I may send one reminder before this checkout expires; there will be no further unsolicited follow-up.',
+    '',
+    'KeschFlow'
+  ].join('\n');
+}
+
+function caseCheckFollowUpMessage(row, checkoutUrl) {
+  const name = clean(row.recipient_name, 120);
+  return [
+    name ? `Hello ${name},` : 'Hello,',
+    '',
+    'One reminder about the Platform/Billing Case Check linked to your public report.',
+    `Checkout: ${checkoutUrl}`,
+    '',
+    'If this is resolved or not relevant, reply NO and I will close the case. This is the final unsolicited reminder.',
     '',
     'KeschFlow'
   ].join('\n');
@@ -579,11 +601,11 @@ async function currentWinner(env) {
   const minValue = numericEnv(env, 'AUTOPILOT_MIN_VALUE_USD', DEFAULT_MIN_VALUE_USD);
   const rows = await env.CASE_DB.prepare(`
     SELECT c.public_case_id, c.status, c.is_active,
-           e.economic_score, e.amount_approx_usd, e.economically_qualified,
+           e.economic_score, e.amount_approx_usd, e.economically_qualified, e.selected_at,
            e.solvability_score, e.reachability_score, e.evidence_score,
            e.effort_score, e.uncertainty_score,
            d.recipient_email, d.recipient_name, d.subject,
-           r.source_title, r.contact_route
+           r.source_title, r.source_excerpt, r.contact_route
       FROM cases c
       JOIN case_economic_scores e ON e.public_case_id = c.public_case_id
       JOIN dispatch_targets d ON d.public_case_id = c.public_case_id
@@ -604,7 +626,7 @@ async function currentWinner(env) {
      LIMIT 20
   `).bind(minScore, minValue).all();
 
-  return (rows.results || []).find(autoContactAllowed) || null;
+  return (rows.results || []).find((row) => autoContactAllowed(row) && hardAutoApproveRules(row, env).approved) || null;
 }
 
 async function currentCaseCheckCandidate(env) {
@@ -669,88 +691,32 @@ async function dailyQuotaStatus(env) {
 }
 
 async function sendInitialOutreach(env, row) {
-  if (!gmailConfigured(env)) return { ok: false, reason: 'GMAIL_NOT_CONFIGURED' };
-  if (!autoContactAllowed(row)) return { ok: false, reason: 'AUTO_CONTACT_NOT_VERIFIED_PUBLIC' };
-  if (!(await claimDailyQuota(env))) return { ok: false, reason: 'DAILY_OUTREACH_CAP_REACHED' };
-
-  const subject = clean(row.subject || 'Regarding your public platform/billing report', 300);
-  const claimedAt = nowIso();
-  try {
-    await env.CASE_DB.prepare(`
-      INSERT INTO revenue_autopilot (
-        public_case_id, stage, economic_score, amount_approx_usd,
-        recipient_email, recipient_name, subject, updated_at
-      ) VALUES (?1, 'CONTACT_CLAIMED', ?2, ?3, ?4, ?5, ?6, ?7)
-    `).bind(
-      row.public_case_id,
-      Number(row.economic_score || 0),
-      Number(row.amount_approx_usd || 0),
-      row.recipient_email,
-      row.recipient_name || null,
-      subject,
-      claimedAt
-    ).run();
-  } catch {
-    return { ok: false, reason: 'ALREADY_CLAIMED' };
-  }
-
-  const body = initialMessage(row, env);
-  let sent;
-  try {
-    sent = await sendGmail(env, { to: row.recipient_email, subject, text: body });
-  } catch (error) {
-    await env.CASE_DB.prepare(`
-      UPDATE revenue_autopilot SET stage = 'SEND_UNKNOWN', error_code = ?2, updated_at = ?3
-      WHERE public_case_id = ?1
-    `).bind(row.public_case_id, clean(error.message || 'GMAIL_SEND_FAILED', 120), nowIso()).run();
-    return { ok: false, reason: 'SEND_UNKNOWN', error: error.message };
-  }
-
-  const sentAt = nowIso();
-  await env.CASE_DB.batch([
-    env.CASE_DB.prepare(`
-      UPDATE revenue_autopilot
-         SET stage = 'OUTREACH_SENT', initial_message_id = ?2, gmail_thread_id = ?3,
-             initial_sent_at = ?4, error_code = NULL, updated_at = ?4
-       WHERE public_case_id = ?1
-    `).bind(row.public_case_id, sent.id, sent.threadId, sentAt),
-    env.CASE_DB.prepare(`
-      UPDATE cases
-         SET outreach_message = ?2, status = 'DISPATCHED', version = version + 1, updated_at = ?3
-       WHERE public_case_id = ?1
-    `).bind(row.public_case_id, body, sentAt),
-    env.CASE_DB.prepare(`
-      INSERT OR IGNORE INTO dispatch_log (public_case_id, provider, provider_message_id, recipient_email, status, error_code, created_at)
-      VALUES (?1, 'GMAIL_AUTOPILOT', ?2, ?3, 'SENT', NULL, ?4)
-    `).bind(row.public_case_id, sent.id, row.recipient_email, sentAt),
-    env.CASE_DB.prepare(`
-      INSERT INTO state_events (public_case_id, event_type, state, source, created_at)
-      VALUES (?1, 'AUTOPILOT_OUTREACH_SENT', 'DISPATCHED', 'REVENUE_AUTOPILOT', ?2)
-    `).bind(row.public_case_id, sentAt)
-  ]);
-
-  return { ok: true, action: 'OUTREACH_SENT', caseId: row.public_case_id, messageId: sent.id, threadId: sent.threadId };
+  await appendAutonomyAudit(env, {
+    caseId: row?.public_case_id || null,
+    eventType: 'LEGACY_INITIAL_OUTREACH_BLOCKED',
+    decision: 'CASE_CHECK_CHECKOUT_REQUIRED',
+    recipientEmail: row?.recipient_email || null
+  });
+  return { ok: false, reason: 'CASE_CHECK_CHECKOUT_REQUIRED' };
 }
 
-async function sendCaseCheckOffer(env, row) {
+async function sendCaseCheckOffer(env, row, { replyMonitoringAvailable = true } = {}) {
+  await ensureAutonomyControlSchema(env);
+
+  const hardDecision = hardAutoApproveRules(row, env);
+  if (!hardDecision.approved) {
+    await appendAutonomyAudit(env, {
+      caseId: row.public_case_id,
+      eventType: 'AUTO_APPROVE_BLOCKED',
+      decision: hardDecision.reasons.join(','),
+      recipientEmail: row.recipient_email,
+      context: { reasons: hardDecision.reasons }
+    });
+    return { ok: true, action: 'PENDING_OWNER_REVIEW', caseId: row.public_case_id, reasons: hardDecision.reasons };
+  }
   if (!gmailConfigured(env)) return { ok: false, reason: 'GMAIL_NOT_CONFIGURED' };
   if (!stripeCheckoutConfigured(env)) return { ok: false, reason: 'STRIPE_NOT_CONFIGURED' };
   if (!autoContactAllowed(row)) return { ok: false, reason: 'AUTO_CONTACT_NOT_VERIFIED_PUBLIC' };
-  if (!(await claimDailyQuota(env))) return { ok: false, reason: 'DAILY_OUTREACH_CAP_REACHED' };
-
-  const subject = clean(row.subject || 'Platform/Billing Case Check for your public report', 300);
-  const claimedAt = nowIso();
-  try {
-    await env.CASE_DB.prepare(`
-      INSERT INTO revenue_autopilot (
-        public_case_id, stage, economic_score, amount_approx_usd,
-        recipient_email, recipient_name, subject, offer_type, updated_at
-      ) VALUES (?1, 'CONTACT_CLAIMED', ?2, ?3, ?4, ?5, ?6, 'CASE_CHECK_49', ?7)
-    `).bind(row.public_case_id, Number(row.economic_score || 0), Number(row.amount_approx_usd || 0),
-      row.recipient_email, row.recipient_name || null, subject, claimedAt).run();
-  } catch {
-    return { ok: false, reason: 'ALREADY_CLAIMED' };
-  }
 
   let checkout;
   try {
@@ -758,41 +724,137 @@ async function sendCaseCheckOffer(env, row) {
       publicCaseId: row.public_case_id,
       customerEmail: row.recipient_email
     });
-    await env.CASE_DB.prepare(`
-      UPDATE revenue_autopilot
-         SET stripe_checkout_session_id = ?2, stripe_checkout_url = ?3,
-             checkout_created_at = ?4, checkout_expires_at = ?5,
-             fixed_offer_amount_cents = ?6, success_fee_currency = 'EUR', updated_at = ?4
-       WHERE public_case_id = ?1 AND offer_type = 'CASE_CHECK_49'
-    `).bind(row.public_case_id, checkout.id, checkout.url, nowIso(), checkout.expiresAt, checkout.amountCents).run();
   } catch (error) {
-    await env.CASE_DB.prepare(`
-      UPDATE revenue_autopilot SET stage = 'CLOSED_OTHER', error_code = ?2, updated_at = ?3
-       WHERE public_case_id = ?1
-    `).bind(row.public_case_id, clean(error.message, 120), nowIso()).run();
+    await appendAutonomyAudit(env, {
+      caseId: row.public_case_id,
+      eventType: 'CHECKOUT_CREATE_BLOCKED_OUTREACH',
+      decision: clean(error.message, 120),
+      recipientEmail: row.recipient_email
+    });
     return { ok: false, reason: 'CASE_CHECK_CHECKOUT_FAILED', error: clean(error.message, 120) };
   }
 
-  const body = caseCheckMessage(row, checkout.url, checkout.amountCents / 100);
+  const checkoutToken = crypto.randomUUID();
+  const trackingUrl = publicCheckoutTrackingUrl(env, checkoutToken);
+  const body = caseCheckMessage(row, trackingUrl, checkout.amountCents / 100);
+  const preflight = await safeOutreachPreflight(env, row, {
+    message: body,
+    checkoutUrl: checkout.url,
+    requireReplyMonitoring: true,
+    replyMonitoringAvailable
+  });
+  if (!preflight.approved) {
+    await appendAutonomyAudit(env, {
+      caseId: row.public_case_id,
+      eventType: 'OUTREACH_PREFLIGHT_BLOCKED',
+      decision: preflight.reasons.join(','),
+      message: body,
+      recipientEmail: row.recipient_email,
+      context: { reasons: preflight.reasons }
+    });
+    return { ok: true, action: 'PENDING_OWNER_REVIEW', caseId: row.public_case_id, reasons: preflight.reasons };
+  }
+
+  if (!(await claimDailyQuota(env))) return { ok: true, action: 'DAILY_OUTREACH_CAP_REACHED' };
+
+  const subject = clean(row.subject || 'Platform/Billing Case Check for your public report', 300);
+  const claimedAt = nowIso();
+  try {
+    await env.CASE_DB.prepare(`
+      INSERT INTO revenue_autopilot (
+        public_case_id, stage, economic_score, amount_approx_usd,
+        recipient_email, recipient_name, subject, offer_type,
+        stripe_checkout_session_id, stripe_checkout_url, checkout_created_at,
+        checkout_expires_at, fixed_offer_amount_cents, success_fee_currency,
+        checkout_public_token, outbound_contact_count, auto_decision, updated_at
+      ) VALUES (
+        ?1, 'CONTACT_CLAIMED', ?2, ?3, ?4, ?5, ?6, 'CASE_CHECK_49',
+        ?7, ?8, ?9, ?10, ?11, 'EUR', ?12, 0, 'AUTO_APPROVED', ?9
+      )
+    `).bind(
+      row.public_case_id,
+      Number(row.economic_score || 0),
+      Number(row.amount_approx_usd || 0),
+      row.recipient_email,
+      row.recipient_name || null,
+      subject,
+      checkout.id,
+      checkout.url,
+      claimedAt,
+      checkout.expiresAt,
+      checkout.amountCents,
+      checkoutToken
+    ).run();
+  } catch (error) {
+    return { ok: false, reason: 'ALREADY_CLAIMED', error: clean(error.message, 120) };
+  }
+
+  await env.CASE_DB.batch([
+    env.CASE_DB.prepare(`
+      UPDATE cases
+         SET status = 'APPROVED_PENDING_DISPATCH', version = version + 1, updated_at = ?2
+       WHERE public_case_id = ?1 AND status = 'PENDING_APPROVAL'
+    `).bind(row.public_case_id, claimedAt),
+    env.CASE_DB.prepare(`
+      INSERT INTO state_events (
+        public_case_id, event_type, state, source,
+        previous_state, actor_ref, request_key, created_at
+      ) VALUES (?1, 'AUTONOMY_AUTO_APPROVED', 'APPROVED_PENDING_DISPATCH', 'AUTONOMY_CONTROL_V1',
+                'PENDING_APPROVAL', 'AUTONOMY_CONTROL_V1', ?2, ?3)
+    `).bind(row.public_case_id, checkout.idempotencyKey, claimedAt)
+  ]);
+  await appendAutonomyAudit(env, {
+    caseId: row.public_case_id,
+    eventType: 'AUTO_APPROVED',
+    decision: 'ALL_HARD_RULES_PASS',
+    message: body,
+    recipientEmail: row.recipient_email,
+    context: { economicScore: Number(row.economic_score || 0), amountApproxUsd: Number(row.amount_approx_usd || 0) }
+  });
+
   let sent;
   try {
-    sent = await sendGmail(env, { to: row.recipient_email, subject, text: body });
+    sent = await sendGmailReply(env, {
+      to: row.recipient_email,
+      subject,
+      text: body,
+      threadId: null
+    });
   } catch (error) {
-    await env.CASE_DB.prepare(`
-      UPDATE revenue_autopilot SET stage = 'SEND_UNKNOWN', error_code = ?2, updated_at = ?3
-       WHERE public_case_id = ?1
-    `).bind(row.public_case_id, clean(error.message || 'GMAIL_SEND_FAILED', 120), nowIso()).run();
-    return { ok: false, reason: 'SEND_UNKNOWN' };
+    // sendGmailReply requires a thread; use the proven first-message path below.
+    try {
+      const { sendGmail } = await import('./gmail.js');
+      sent = await sendGmail(env, { to: row.recipient_email, subject, text: body });
+    } catch (sendError) {
+      const code = clean(sendError.message || error.message || 'GMAIL_SEND_FAILED', 120);
+      await env.CASE_DB.prepare(`
+        UPDATE revenue_autopilot
+           SET stage = 'SEND_UNKNOWN', error_code = ?2, owner_attention_reason = 'SEND_UNKNOWN', updated_at = ?3
+         WHERE public_case_id = ?1
+      `).bind(row.public_case_id, code, nowIso()).run();
+      await appendAutonomyAudit(env, {
+        caseId: row.public_case_id,
+        eventType: 'OUTREACH_SEND_UNKNOWN',
+        decision: code,
+        message: body,
+        recipientEmail: row.recipient_email
+      });
+      return { ok: false, reason: 'SEND_UNKNOWN', error: code };
+    }
   }
 
   const sentAt = nowIso();
+  const followUpHours = Math.max(1, numericEnv(env, 'AUTOPILOT_FOLLOWUP_HOURS', 12));
+  const nextFollowUpAt = new Date(Date.parse(sentAt) + followUpHours * 3600000).toISOString();
   await env.CASE_DB.batch([
     env.CASE_DB.prepare(`
       UPDATE revenue_autopilot
          SET stage = 'CASE_CHECK_PAYMENT_PENDING', initial_message_id = ?2, gmail_thread_id = ?3,
-             initial_sent_at = ?4, payment_requested_at = ?4, payment_status = 'REQUESTED', error_code = NULL, updated_at = ?4
+             initial_sent_at = ?4, payment_requested_at = ?4, payment_status = 'REQUESTED',
+             outbound_contact_count = 1, next_follow_up_at = ?5,
+             error_code = NULL, owner_attention_reason = NULL, updated_at = ?4
        WHERE public_case_id = ?1
-    `).bind(row.public_case_id, sent.id, sent.threadId, sentAt),
+    `).bind(row.public_case_id, sent.id, sent.threadId, sentAt, nextFollowUpAt),
     env.CASE_DB.prepare(`
       UPDATE cases SET outreach_message = ?2, status = 'DISPATCHED', version = version + 1, updated_at = ?3
        WHERE public_case_id = ?1
@@ -806,9 +868,18 @@ async function sendCaseCheckOffer(env, row) {
         public_case_id, event_type, state, source,
         previous_state, actor_ref, request_key, created_at
       ) VALUES (?1, 'CASE_CHECK_OFFER_SENT', 'PAYMENT_PENDING', 'REVENUE_AUTOPILOT',
-        'CONTACT_CLAIMED', 'REVENUE_AUTOPILOT', ?2, ?3)
+        'APPROVED_PENDING_DISPATCH', 'REVENUE_AUTOPILOT', ?2, ?3)
     `).bind(row.public_case_id, checkout.idempotencyKey, sentAt)
   ]);
+  await appendAutonomyAudit(env, {
+    caseId: row.public_case_id,
+    eventType: 'OUTREACH_SENT',
+    decision: 'AUTO_APPROVED',
+    message: body,
+    recipientEmail: row.recipient_email,
+    providerMessageId: sent.id,
+    context: { contactNumber: 1, checkoutTracked: true }
+  });
   return { ok: true, action: 'CASE_CHECK_OFFER_SENT', caseId: row.public_case_id, amountCents: checkout.amountCents };
 }
 
@@ -837,73 +908,79 @@ async function handleInbound(env, record, message) {
   const at = nowIso();
 
   if (classification === 'NEGATIVE') {
-    await env.CASE_DB.prepare(`
-      UPDATE revenue_autopilot SET stage = 'CLOSED_NOT_INTERESTED', updated_at = ?2 WHERE public_case_id = ?1
-    `).bind(record.public_case_id, at).run();
-    return { ok: true, action: 'CLOSED_NOT_INTERESTED', caseId: record.public_case_id };
-  }
-
-  if (record.stage === 'OUTREACH_SENT' && classification === 'POSITIVE') {
-    const sent = await sendThreadReply(env, record, message, termsMessage(env));
-    await env.CASE_DB.prepare(`
-      UPDATE revenue_autopilot SET stage = 'TERMS_SENT', terms_sent_at = ?2, updated_at = ?2
-      WHERE public_case_id = ?1
-    `).bind(record.public_case_id, at).run();
-    return { ok: true, action: 'TERMS_SENT', caseId: record.public_case_id, messageId: sent.id };
-  }
-
-  if (record.stage === 'TERMS_SENT' && classification === 'ACCEPT') {
-    const sent = await sendThreadReply(env, record, message, evidenceChecklistMessage());
+    await suppressRecipient(env, record.recipient_email, 'RECIPIENT_OPT_OUT', record.public_case_id, 'GMAIL_REPLY');
     await env.CASE_DB.batch([
       env.CASE_DB.prepare(`
         UPDATE revenue_autopilot
-           SET stage = 'ENGAGED', engagement_accepted_at = ?2, updated_at = ?2
+           SET stage = 'CLOSED_NOT_INTERESTED', owner_attention_reason = NULL, updated_at = ?2
          WHERE public_case_id = ?1
       `).bind(record.public_case_id, at),
       env.CASE_DB.prepare(`
-        INSERT INTO state_events (public_case_id, event_type, state, source, created_at)
-        VALUES (?1, 'CUSTOMER_ENGAGED', 'RESPONSE_RECEIVED', 'REVENUE_AUTOPILOT', ?2)
-      `).bind(record.public_case_id, at)
-    ]);
-    return { ok: true, action: 'ENGAGED', caseId: record.public_case_id, messageId: sent.id };
-  }
-
-  if ((record.stage === 'ENGAGED' || record.stage === 'EVIDENCE_RECEIVED' || record.stage === 'CASE_CHECK_PAID_AWAITING_EVIDENCE')
-    && classification === 'EVIDENCE') {
-    if (record.stage !== 'EVIDENCE_RECEIVED') {
-      await env.CASE_DB.prepare(`
-        UPDATE revenue_autopilot SET stage = 'EVIDENCE_RECEIVED', evidence_received_at = ?2, updated_at = ?2
-        WHERE public_case_id = ?1
-      `).bind(record.public_case_id, at).run();
-    }
-    return { ok: true, action: 'EVIDENCE_RECEIVED', caseId: record.public_case_id, attachments: message.attachments.length };
-  }
-
-  if ((record.stage === 'ENGAGED' || record.stage === 'EVIDENCE_RECEIVED' || record.stage === 'SUCCESS_CONFIRMATION_PENDING')
-    && classification === 'SUCCESS') {
-    const recovered = extractApproxUsd(message.text);
-    const minValue = successFeeConfig(env).minRecoveredUsd;
-    if (recovered < minValue) {
-      const sent = await sendThreadReply(env, record, message, successAmountQuestion(env));
-      await env.CASE_DB.prepare(`
-        UPDATE revenue_autopilot
-           SET stage = 'SUCCESS_CONFIRMATION_PENDING', success_confirmed_at = ?2,
-               recovered_approx_usd = ?3, updated_at = ?2
+        UPDATE cases
+           SET status = 'REJECTED', is_active = 0, version = version + 1, updated_at = ?2
          WHERE public_case_id = ?1
-      `).bind(record.public_case_id, at, recovered).run();
-      return { ok: true, action: 'SUCCESS_AMOUNT_CONFIRMATION_REQUESTED', caseId: record.public_case_id, messageId: sent.id };
-    }
-    return requestDynamicPayment(env, record, message, recovered, at);
+      `).bind(record.public_case_id, at),
+      env.CASE_DB.prepare(`
+        INSERT INTO state_events (
+          public_case_id, event_type, state, source,
+          previous_state, actor_ref, request_key, created_at
+        ) VALUES (?1, 'RECIPIENT_OPT_OUT', 'REJECTED', 'REVENUE_AUTOPILOT',
+                  'DISPATCHED', 'RECIPIENT', ?2, ?3)
+      `).bind(record.public_case_id, message.id, at)
+    ]);
+    await appendAutonomyAudit(env, {
+      caseId: record.public_case_id,
+      eventType: 'RECIPIENT_OPT_OUT',
+      decision: 'SUPPRESSED',
+      recipientEmail: record.recipient_email,
+      context: { messageId: message.id }
+    });
+    return { ok: true, action: 'CLOSED_NOT_INTERESTED', caseId: record.public_case_id };
   }
 
-  if (classification === 'AMBIGUOUS') {
-    await env.CASE_DB.prepare(`
-      UPDATE revenue_autopilot SET stage = 'RESPONSE_REVIEW', updated_at = ?2 WHERE public_case_id = ?1
-    `).bind(record.public_case_id, at).run();
-    return { ok: true, action: 'RESPONSE_REVIEW', caseId: record.public_case_id };
-  }
+  const reason = `INBOUND_${classification}`;
+  await env.CASE_DB.batch([
+    env.CASE_DB.prepare(`
+      UPDATE revenue_autopilot
+         SET stage = 'RESPONSE_REVIEW', owner_attention_reason = ?2, updated_at = ?3
+       WHERE public_case_id = ?1
+    `).bind(record.public_case_id, reason, at),
+    env.CASE_DB.prepare(`
+      UPDATE cases
+         SET status = 'RESPONSE_RECEIVED', is_active = 1, version = version + 1, updated_at = ?2
+       WHERE public_case_id = ?1
+    `).bind(record.public_case_id, at),
+    env.CASE_DB.prepare(`
+      INSERT INTO state_events (
+        public_case_id, event_type, state, source,
+        previous_state, actor_ref, request_key, created_at
+      ) VALUES (?1, 'OWNER_ATTENTION_REQUIRED', 'RESPONSE_RECEIVED', 'REVENUE_AUTOPILOT',
+                ?2, 'RECIPIENT', ?3, ?4)
+    `).bind(record.public_case_id, record.stage, message.id, at)
+  ]);
+  await appendAutonomyAudit(env, {
+    caseId: record.public_case_id,
+    eventType: 'INBOUND_REQUIRES_OWNER',
+    decision: classification,
+    recipientEmail: record.recipient_email,
+    context: { messageId: message.id, priorStage: record.stage, attachments: message.attachments.length }
+  });
+  return { ok: true, action: 'OWNER_ATTENTION_REQUIRED', caseId: record.public_case_id, classification };
+}
 
-  return { ok: true, action: 'REPLY_RECORDED', caseId: record.public_case_id, classification };
+async function loadSafetyRow(env, caseId) {
+  return env.CASE_DB.prepare(`
+    SELECT c.public_case_id,
+           e.economic_score, e.amount_approx_usd, e.economically_qualified, e.selected_at,
+           e.solvability_score, e.reachability_score, e.evidence_score, e.effort_score, e.uncertainty_score,
+           a.recipient_email, a.recipient_name, a.subject,
+           r.source_title, r.source_excerpt, r.contact_route
+      FROM cases c
+      JOIN case_economic_scores e ON e.public_case_id = c.public_case_id
+      JOIN revenue_autopilot a ON a.public_case_id = c.public_case_id
+      JOIN radar_candidates r ON r.public_case_id = c.public_case_id
+     WHERE c.public_case_id = ?1
+  `).bind(caseId).first();
 }
 
 async function monitorOpenCase(env, record) {
@@ -931,6 +1008,78 @@ async function monitorOpenCase(env, record) {
   const next = messages.find((message) => message.id && message.id !== record.last_inbound_message_id
     && message.internalDate > (Date.parse(record.last_inbound_at || '') || 0));
   if (next) return handleInbound(env, record, next);
+
+  if (record.stage === 'CASE_CHECK_PAYMENT_PENDING' && !record.follow_up_sent_at) {
+    const maxContacts = Math.max(1, Math.floor(numericEnv(env, 'AUTOPILOT_MAX_CONTACTS_PER_CASE', 2)));
+    const contactCount = Number(record.outbound_contact_count || 0);
+    const followAt = Date.parse(record.next_follow_up_at || '');
+    const expiresAt = Date.parse(record.checkout_expires_at || '');
+    if (contactCount < maxContacts && Number.isFinite(followAt) && Date.now() >= followAt
+      && Number.isFinite(expiresAt) && Date.now() < expiresAt) {
+      const safetyRow = await loadSafetyRow(env, record.public_case_id);
+      const trackingUrl = publicCheckoutTrackingUrl(env, record.checkout_public_token);
+      const message = caseCheckFollowUpMessage(record, trackingUrl);
+      const preflight = await safeOutreachPreflight(env, safetyRow, {
+        message,
+        checkoutUrl: record.stripe_checkout_url,
+        requireReplyMonitoring: true,
+        replyMonitoringAvailable: true,
+        allowPriorSent: true
+      });
+      if (!preflight.approved) {
+        await env.CASE_DB.prepare(`
+          UPDATE revenue_autopilot
+             SET owner_attention_reason = 'FOLLOW_UP_BLOCKED', error_code = ?2, updated_at = ?3
+           WHERE public_case_id = ?1
+        `).bind(record.public_case_id, preflight.reasons.join(',').slice(0, 120), nowIso()).run();
+        await appendAutonomyAudit(env, {
+          caseId: record.public_case_id,
+          eventType: 'FOLLOW_UP_BLOCKED',
+          decision: preflight.reasons.join(','),
+          recipientEmail: record.recipient_email,
+          context: { reasons: preflight.reasons }
+        });
+        return { ok: true, action: 'FOLLOW_UP_BLOCKED', caseId: record.public_case_id, reasons: preflight.reasons };
+      }
+
+      const sent = await sendThreadReply(env, record, {
+        subject: record.subject,
+        messageIdHeader: null,
+        references: null
+      }, message);
+      const at = nowIso();
+      await env.CASE_DB.batch([
+        env.CASE_DB.prepare(`
+          UPDATE revenue_autopilot
+             SET outbound_contact_count = outbound_contact_count + 1,
+                 follow_up_sent_at = ?2, next_follow_up_at = NULL, updated_at = ?2
+           WHERE public_case_id = ?1
+        `).bind(record.public_case_id, at),
+        env.CASE_DB.prepare(`
+          INSERT OR IGNORE INTO dispatch_log (
+            public_case_id, provider, provider_message_id, recipient_email, status, error_code, created_at
+          ) VALUES (?1, 'GMAIL_AUTOPILOT', ?2, ?3, 'SENT', NULL, ?4)
+        `).bind(record.public_case_id, sent.id, record.recipient_email, at),
+        env.CASE_DB.prepare(`
+          INSERT INTO state_events (
+            public_case_id, event_type, state, source,
+            previous_state, actor_ref, request_key, created_at
+          ) VALUES (?1, 'AUTOPILOT_FOLLOW_UP_SENT', 'PAYMENT_PENDING', 'REVENUE_AUTOPILOT',
+                    'PAYMENT_PENDING', 'REVENUE_AUTOPILOT', ?2, ?3)
+        `).bind(record.public_case_id, sent.id, at)
+      ]);
+      await appendAutonomyAudit(env, {
+        caseId: record.public_case_id,
+        eventType: 'FOLLOW_UP_SENT',
+        decision: 'FINAL_REMINDER',
+        message,
+        recipientEmail: record.recipient_email,
+        providerMessageId: sent.id,
+        context: { contactNumber: contactCount + 1, maxContacts }
+      });
+      return { ok: true, action: 'FOLLOW_UP_SENT', caseId: record.public_case_id };
+    }
+  }
 
   if (record.stage === 'OUTREACH_SENT') {
     const ageDays = (Date.now() - Date.parse(record.initial_sent_at || '')) / 86400000;
@@ -985,7 +1134,6 @@ async function monitorOpenCases(env, records, monitor = monitorOpenCase) {
 async function acquireDailyCandidate(env, operations = {}) {
   const quotaStatus = operations.dailyQuotaStatus || dailyQuotaStatus;
   const selectWinner = operations.currentWinner || currentWinner;
-  const sendWinner = operations.sendInitialOutreach || sendInitialOutreach;
   const selectCaseCheck = operations.currentCaseCheckCandidate || currentCaseCheckCandidate;
   const sendCaseCheck = operations.sendCaseCheckOffer || sendCaseCheckOffer;
 
@@ -993,10 +1141,12 @@ async function acquireDailyCandidate(env, operations = {}) {
   if (!quota.available) return { ok: true, action: 'DAILY_OUTREACH_CAP_REACHED', quota };
 
   const winner = await selectWinner(env);
-  if (winner) return { ...(await sendWinner(env, winner)), quota };
+  if (winner) return { ...(await sendCaseCheck(env, winner, { replyMonitoringAvailable: true })), quota };
 
   const caseCheckCandidate = await selectCaseCheck(env);
-  if (caseCheckCandidate) return { ...(await sendCaseCheck(env, caseCheckCandidate)), quota };
+  if (caseCheckCandidate) {
+    return { ok: true, action: 'PENDING_OWNER_REVIEW', caseId: caseCheckCandidate.public_case_id, quota };
+  }
 
   return { ok: true, action: 'NO_WINNER', quota };
 }
@@ -1049,6 +1199,7 @@ export async function revenueAutopilotStatus(env) {
 
 export async function runRevenueAutopilot(env) {
   await ensureRevenueAutopilotSchema(env);
+  await ensureAutonomyControlSchema(env);
   if (!enabled(env)) return { ok: true, enabled: false, action: 'DISABLED' };
 
   const token = await acquireLock(env);
