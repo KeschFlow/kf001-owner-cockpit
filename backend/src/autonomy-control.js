@@ -238,7 +238,8 @@ export async function safeOutreachPreflight(env, row, {
   message,
   checkoutUrl,
   requireReplyMonitoring = true,
-  replyMonitoringAvailable = false
+  replyMonitoringAvailable = false,
+  allowPriorSent = false
 } = {}) {
   await ensureAutonomyControlSchema(env);
   const decision = hardAutoApproveRules(row, env);
@@ -270,7 +271,7 @@ export async function safeOutreachPreflight(env, row, {
        AND status = 'SENT'
      LIMIT 1
   `).bind(row.public_case_id, recipient).first();
-  if (duplicate) reasons.push('ALREADY_SENT');
+  if (duplicate && !allowPriorSent) reasons.push('ALREADY_SENT');
 
   return {
     approved: reasons.length === 0,
