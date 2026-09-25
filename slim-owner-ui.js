@@ -5,6 +5,8 @@
   const config = () => globalThis.KF001_CONFIG || {};
   const endpoint = (path) => `${String(config().apiBaseUrl || '').replace(/\/$/, '')}${path}`;
   let autopilotStatus = null;
+  let ownerSnapshot = null;
+  let ownerSnapshotError = null;
 
   function readStoredNumber(keys) {
     for (const key of keys) {
@@ -119,7 +121,9 @@
 
     refreshSlimView();
     refreshAutopilotStatus();
+    refreshOwnerSnapshot();
     setInterval(refreshAutopilotStatus, 30000);
+    setInterval(refreshOwnerSnapshot, 10000);
     // Avoid a self-triggering MutationObserver loop: refreshSlimView() itself updates
     // text/classes, which previously retriggered the observer continuously and could
     // freeze the installed PWA/browser tab. A light periodic refresh is sufficient.
@@ -157,6 +161,36 @@
     } catch {
       autopilotStatus = null;
       renderAutopilotControls();
+    }
+  }
+
+  async function refreshOwnerSnapshot() {
+    const path = config().ownerStatePath || '/v1/owner-state';
+    if (!config().apiBaseUrl) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6000);
+    try {
+      const response = await fetch(endpoint(path), {
+        cache: 'no-store',
+        credentials: config().ownerStateCredentials || 'omit',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal
+      });
+      const body = await response.json().catch(() => ({}));
+      if (response.status === 404 && body.error === 'NO_ACTIVE_CASE') {
+        ownerSnapshot = { noActiveCase: true };
+        ownerSnapshotError = null;
+      } else if (response.ok) {
+        ownerSnapshot = body;
+        ownerSnapshotError = null;
+      } else {
+        throw new Error(body.error || `OWNER_STATE_${response.status}`);
+      }
+    } catch (error) {
+      ownerSnapshotError = error?.name === 'AbortError' ? 'BACKEND_TIMEOUT' : (error?.message || 'OWNER_STATE_FAILED');
+    } finally {
+      clearTimeout(timer);
+      refreshSlimView();
     }
   }
 
@@ -264,14 +298,22 @@
     }
 
     const gateText = gate?.textContent || '';
-    const workItemState = gate?.dataset.workItemState || 'unavailable';
+    const domWorkItemState = gate?.dataset.workItemState || 'unavailable';
+    const snapshotActive = Boolean(ownerSnapshot?.caseId && ['PENDING_APPROVAL', 'APPROVED_PENDING_DISPATCH'].includes(ownerSnapshot?.status));
+    const workItemState = domWorkItemState === 'active'
+      ? 'active'
+      : snapshotActive
+        ? 'active'
+        : ownerSnapshot?.noActiveCase
+          ? 'none'
+          : domWorkItemState;
     const hasActiveWorkItem = workItemState === 'active';
-    const caseId = hasActiveWorkItem ? (gate.dataset.workItemCaseId || '—') : '—';
-    const caseValue = hasActiveWorkItem ? (extractGateValue('CASE_VALUE_SCORE') || '—') : '—';
-    const impact = hasActiveWorkItem ? (extractGateValue('IMPACT-KLASSE') || '—') : '—';
-    const status = hasActiveWorkItem ? (gate.dataset.workItemStatus || '—') : '—';
-    const version = hasActiveWorkItem ? (gate.dataset.workItemVersion || '—') : '—';
-    const updatedAt = hasActiveWorkItem ? (gate.dataset.workItemUpdatedAt || '—') : '—';
+    const caseId = hasActiveWorkItem ? (gate?.dataset.workItemCaseId || ownerSnapshot?.caseId || '—') : '—';
+    const caseValue = hasActiveWorkItem ? (extractGateValue('CASE_VALUE_SCORE') || (Number.isFinite(Number(ownerSnapshot?.caseValueScore)) ? `${ownerSnapshot.caseValueScore}/100` : '—')) : '—';
+    const impact = hasActiveWorkItem ? (extractGateValue('IMPACT-KLASSE') || ownerSnapshot?.impactClass || '—') : '—';
+    const status = hasActiveWorkItem ? (gate?.dataset.workItemStatus || ownerSnapshot?.status || '—') : '—';
+    const version = hasActiveWorkItem ? (gate?.dataset.workItemVersion || ownerSnapshot?.version || '—') : '—';
+    const updatedAt = hasActiveWorkItem ? (gate?.dataset.workItemUpdatedAt || ownerSnapshot?.updatedAt || '—') : '—';
     text('slimWorkItemLabel', hasActiveWorkItem
       ? 'ACTIVE WORK ITEM'
       : (workItemState === 'none' ? 'NO ACTIVE WORK ITEM' : 'ACTIVE WORK ITEM UNAVAILABLE'));
@@ -330,6 +372,20 @@
       action.className = 'mt-1 text-sm font-bold text-amber-300';
       text('slimActionBtn', 'STATUS ÖFFNEN');
       actionBtn.classList.remove('hidden');
+    } else if (ownerSnapshot?.noActiveCase) {
+      text('slimNextAction', 'Keine Aktion. Radar sucht im Hintergrund weiter.');
+      action.className = 'mt-1 text-sm font-bold text-slate-300';
+    } else if (snapshotActive) {
+      text('slimNextAction', 'Owner-Entscheidung fällig: APPROVE oder REJECT.');
+      action.className = 'mt-1 text-sm font-bold text-amber-300';
+      text('slimActionBtn', 'ENTSCHEIDUNG ÖFFNEN');
+      actionBtn.classList.remove('hidden');
+    } else if (ownerSnapshotError) {
+      text('slimNextAction', `Owner-State nicht erreichbar: ${ownerSnapshotError}`);
+      action.className = 'mt-1 text-sm font-bold text-rose-300';
+    } else {
+      text('slimNextAction', 'Systemstatus wird synchronisiert …');
+      action.className = 'mt-1 text-sm font-bold text-slate-400';
     }
   }
 
