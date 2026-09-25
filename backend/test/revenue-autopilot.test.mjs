@@ -201,7 +201,7 @@ test('legacy success-fee settlement remains server-side while initial autonomous
 });
 
 test('worker v3 runs the revenue autopilot only inside the isolated sidecar', () => {
-  assert.match(workerV3, /runRevenueAutopilot\(env\)/);
+  assert.match(workerV3, /runRevenueAutopilot\(env, \{ replyMonitoringAvailable: replyProcessingAvailable \}\)/);
   assert.match(workerV3, /ctx\.waitUntil\(runAutonomySidecar\(env\)\)/);
 });
 
