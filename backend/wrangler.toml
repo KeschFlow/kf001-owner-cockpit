@@ -6,9 +6,12 @@ workers_dev = true
 [vars]
 PUBLIC_APP_ORIGIN = "https://keschflow.github.io"
 REVENUE_AUTOPILOT_ENABLED = "true"
+AUTOPILOT_AUTO_APPROVE_ENABLED = "true"
 AUTOPILOT_MIN_ECONOMIC_SCORE = "72"
 AUTOPILOT_MIN_VALUE_USD = "8000"
 AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY = "1"
+AUTOPILOT_FOLLOWUP_HOURS = "12"
+AUTOPILOT_MAX_CONTACTS_PER_CASE = "2"
 CASE_CHECK_ENABLED = "true"
 CASE_CHECK_PRICE_EUR = "49"
 CASE_CHECK_MIN_ECONOMIC_SCORE = "58"
@@ -21,6 +24,7 @@ SUCCESS_FEE_EUR_USD_RATE = "0.90"
 USD_TO_EUR_RATE = "0.90"
 STRIPE_SUCCESS_URL = "https://keschflow.github.io/kf001-owner-cockpit/?payment=success"
 STRIPE_CANCEL_URL = "https://keschflow.github.io/kf001-owner-cockpit/?payment=cancelled"
+PUBLIC_WORKER_URL = "https://kf001-owner-backend.kf001-owner-backend.workers.dev"
 
 [secrets]
 required = [
