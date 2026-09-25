@@ -401,7 +401,7 @@ export async function resolveCheckoutRedirect(env, token) {
 
 export async function revenueMoneyMetrics(env) {
   await ensureAutonomyControlSchema(env);
-  const [contacts, checkouts, payments, open, attention] = await Promise.all([
+  const [contacts, checkouts, payments, open, attention, latestAttention] = await Promise.all([
     env.CASE_DB.prepare(`
       SELECT COUNT(*) AS count
         FROM dispatch_log
@@ -434,6 +434,13 @@ export async function revenueMoneyMetrics(env) {
       SELECT COUNT(*) AS count
         FROM revenue_autopilot
        WHERE owner_attention_reason IS NOT NULL
+    `).first(),
+    env.CASE_DB.prepare(`
+      SELECT public_case_id, owner_attention_reason
+        FROM revenue_autopilot
+       WHERE owner_attention_reason IS NOT NULL
+       ORDER BY updated_at DESC
+       LIMIT 1
     `).first()
   ]);
 
@@ -444,7 +451,9 @@ export async function revenueMoneyMetrics(env) {
     paymentsReceived: Number(payments?.count || 0),
     openAmountEur: Number(open?.open_minor || 0) / 100,
     realizedRevenueEur: Number(payments?.realized_minor || 0) / 100,
-    ownerAttentionCount: Number(attention?.count || 0)
+    ownerAttentionCount: Number(attention?.count || 0),
+    attentionCaseId: latestAttention?.public_case_id || null,
+    attentionReason: latestAttention?.owner_attention_reason || null
   };
 }
 
