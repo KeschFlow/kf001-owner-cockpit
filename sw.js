@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kf001-owner-cockpit-v14-bounded-data-boot';
+const CACHE_NAME = 'kf001-owner-cockpit-v15-instant-shell';
 const APP_SHELL = [
   './',
   './index.html',
@@ -61,32 +61,48 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+
   if (event.request.mode === 'navigate') {
-    event.respondWith(
-      fetch(event.request, { cache: 'no-store' })
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE_NAME);
+      const cached = await cache.match('./index.html');
+      const refresh = fetch(event.request, { cache: 'no-store' })
         .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put('./index.html', copy));
+          if (response.ok) cache.put('./index.html', response.clone());
           return response;
         })
-        .catch(() => caches.match('./index.html'))
-    );
+        .catch(() => null);
+      if (cached) {
+        event.waitUntil(refresh);
+        return cached;
+      }
+      return (await refresh) || new Response(
+        '<!doctype html><html><body style="margin:0;background:#0f172a;color:#fff;font-family:system-ui;padding:24px"><h1>KF001 FALLRADAR</h1><p>Offline-Start nicht verfügbar. Bitte erneut öffnen.</p></body></html>',
+        { headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+      );
+    })());
     return;
   }
 
   const requestUrl = new URL(event.request.url);
   if (requestUrl.origin === self.location.origin) {
-    event.respondWith(
-      fetch(event.request, { cache: 'no-store' })
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE_NAME);
+      const cached = await cache.match(event.request, { ignoreSearch: true });
+      const refresh = fetch(event.request, { cache: 'no-store' })
         .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          if (response.ok) cache.put(event.request, response.clone());
           return response;
         })
-        .catch(() => caches.match(event.request))
-    );
+        .catch(() => null);
+      if (cached) {
+        event.waitUntil(refresh);
+        return cached;
+      }
+      return (await refresh) || new Response('', { status: 504 });
+    })());
     return;
   }
 
-  event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
+  event.respondWith(fetch(event.request));
 });
