@@ -101,6 +101,10 @@ class SqliteD1 {
   }
 }
 
+function applyAllMigrations(db) {
+  applyAllMigrations(db);
+}
+
 function intakeRequest() {
   return new Request('https://worker.test/v1/radar/intake', {
     method: 'POST',
@@ -270,6 +274,17 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
   assert.equal(pending.offer_type, 'CASE_CHECK_49');
   assert.equal(pending.stripe_checkout_session_id, CHECKOUT_ID);
   assert.equal(pending.fixed_offer_amount_cents, 4900);
+  assert.match(String(pending.checkout_public_token || ''), /^[a-f0-9-]{32,64}$/i);
+
+  const checkoutRedirect = await worker.fetch(
+    new Request(`https://worker.test/v1/checkout?t=${pending.checkout_public_token}`),
+    env,
+    { waitUntil() {} }
+  );
+  assert.equal(checkoutRedirect.status, 302);
+  assert.equal(checkoutRedirect.headers.get('Location'), `https://checkout.stripe.com/c/pay/${CHECKOUT_ID}`);
+  assert.equal(db.get('SELECT checkout_view_count FROM revenue_autopilot WHERE public_case_id = ?', CASE_ID).checkout_view_count, 1);
+
   assert.equal(db.get('SELECT status FROM cases WHERE public_case_id = ?', CASE_ID).status, 'DISPATCHED');
   assert.equal(db.get('SELECT COUNT(*) AS count FROM revenue_autopilot WHERE public_case_id = ?', CASE_ID).count, 1);
   assert.equal(db.get('SELECT COUNT(*) AS count FROM dispatch_log WHERE public_case_id = ?', CASE_ID).count, 1);
@@ -371,4 +386,86 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
   assert.equal(db.get('SELECT COUNT(*) AS count FROM state_events WHERE public_case_id = ?', CASE_ID).count, 4);
   assert.equal(db.get('SELECT COUNT(*) AS count FROM autonomy_audit_log WHERE public_case_id = ?', CASE_ID).count >= 3, true);
   assert.equal(db.get('SELECT COUNT(*) AS count FROM dispatch_log WHERE public_case_id = ?', CASE_ID).count, 1);
+});
+
+
+test('global kill switch blocks a hard-qualified case before Gmail outreach', async (t) => {
+  const db = new SqliteD1();
+  t.after(() => db.close());
+  applyAllMigrations(db);
+
+  let stripeCalls = 0;
+  let gmailSends = 0;
+  t.mock.method(globalThis, 'fetch', async (input) => {
+    const url = String(input);
+    if (url === 'https://api.stripe.com/v1/checkout/sessions') {
+      stripeCalls += 1;
+      return new Response(JSON.stringify({
+        id: 'cs_test_kill_switch',
+        url: 'https://checkout.stripe.com/c/pay/cs_test_kill_switch',
+        amount_total: 4900,
+        currency: 'eur',
+        expires_at: Math.floor(Date.now() / 1000) + 3600
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (url === 'https://oauth2.googleapis.com/token') {
+      return new Response(JSON.stringify({ access_token: 'unit-test-access-token' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    if (url === 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send') {
+      gmailSends += 1;
+      return new Response(JSON.stringify({ id: 'SHOULD_NOT_SEND', threadId: 'SHOULD_NOT_SEND' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    throw new Error(`Unexpected network call: ${url}`);
+  });
+
+  const env = {
+    CASE_DB: db,
+    RADAR_INGEST_TOKEN: 'UNIT_TEST_ONLY',
+    REVENUE_AUTOPILOT_ENABLED: 'true',
+    AUTOPILOT_AUTO_APPROVE_ENABLED: 'true',
+    AUTOPILOT_MIN_ECONOMIC_SCORE: '72',
+    AUTOPILOT_MIN_VALUE_USD: '8000',
+    CASE_CHECK_ENABLED: 'true',
+    CASE_CHECK_MIN_ECONOMIC_SCORE: '58',
+    CASE_CHECK_MIN_VALUE_USD: '500',
+    CASE_CHECK_PRICE_EUR: '49',
+    AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY: '1',
+    AUTOPILOT_FOLLOWUP_HOURS: '12',
+    AUTOPILOT_MAX_CONTACTS_PER_CASE: '2',
+    PUBLIC_WORKER_URL: 'https://worker.test',
+    GMAIL_CLIENT_ID: 'unit-test-client-id',
+    GMAIL_CLIENT_SECRET: 'unit-test-client-secret',
+    GMAIL_REFRESH_TOKEN: 'unit-test-refresh-token',
+    GMAIL_FROM: 'owner@example.test',
+    STRIPE_SECRET_KEY: 'unit-test-stripe-key',
+    STRIPE_SUCCESS_URL: 'https://example.test/payment/success',
+    STRIPE_CANCEL_URL: 'https://example.test/payment/cancel'
+  };
+
+  const intake = await handleRadarIntakeRequest(intakeRequest(), env);
+  assert.equal(intake.status, 201);
+  db.sqlite.prepare(`
+    UPDATE autonomy_control
+       SET outreach_enabled = 0, updated_by = 'TEST_KILL', updated_at = CURRENT_TIMESTAMP
+     WHERE id = 1
+  `).run();
+
+  const cycle = await runRevenueAutopilot(env, { replyMonitoringAvailable: false });
+  assert.equal(cycle.action, 'PENDING_OWNER_REVIEW');
+  assert.equal(cycle.acquisition.reasons.includes('GLOBAL_KILL_SWITCH'), true);
+  assert.equal(stripeCalls, 1);
+  assert.equal(gmailSends, 0);
+  assert.equal(db.get('SELECT COUNT(*) AS count FROM dispatch_log WHERE public_case_id = ?', CASE_ID).count, 0);
+  assert.equal(db.get('SELECT status FROM cases WHERE public_case_id = ?', CASE_ID).status, 'PENDING_APPROVAL');
+  assert.equal(db.get('SELECT sent_count FROM revenue_autopilot_quota LIMIT 1')?.sent_count || 0, 0);
+  assert.equal(
+    db.get("SELECT COUNT(*) AS count FROM autonomy_audit_log WHERE public_case_id = ? AND event_type = 'OUTREACH_PREFLIGHT_BLOCKED'", CASE_ID).count,
+    1
+  );
 });
