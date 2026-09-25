@@ -329,7 +329,7 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
     event_type, state, source, previous_state, actor_ref, request_key
   }) => ({ event_type, state, source, previous_state, actor_ref, request_key })), [
     {
-      event_type: 'ECONOMIC_CASE_CHECK_SELECTED',
+      event_type: 'ECONOMIC_WINNER_SELECTED',
       state: 'PENDING_APPROVAL',
       source: 'ECONOMIC_SELECTOR_V1',
       previous_state: null,
@@ -337,10 +337,18 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
       request_key: 'GH:EXT-CASE-CHECK-001'
     },
     {
+      event_type: 'AUTONOMY_AUTO_APPROVED',
+      state: 'APPROVED_PENDING_DISPATCH',
+      source: 'AUTONOMY_CONTROL_V1',
+      previous_state: 'PENDING_APPROVAL',
+      actor_ref: 'AUTONOMY_CONTROL_V1',
+      request_key: `kf001-case-check-${CASE_ID}-v1`
+    },
+    {
       event_type: 'CASE_CHECK_OFFER_SENT',
       state: 'PAYMENT_PENDING',
       source: 'REVENUE_AUTOPILOT',
-      previous_state: 'CONTACT_CLAIMED',
+      previous_state: 'APPROVED_PENDING_DISPATCH',
       actor_ref: 'REVENUE_AUTOPILOT',
       request_key: `kf001-case-check-${CASE_ID}-v1`
     },
@@ -360,6 +368,7 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
   assert.deepEqual(await duplicateWebhook.json(), { ok: true, received: true, duplicate: true });
   assert.equal(db.get('SELECT COUNT(*) AS count FROM stripe_payments WHERE event_id = ?', PAYMENT_EVENT_ID).count, 1);
   assert.equal(db.get('SELECT COUNT(*) AS count FROM stripe_webhook_events WHERE event_id = ?', PAYMENT_EVENT_ID).count, 1);
-  assert.equal(db.get('SELECT COUNT(*) AS count FROM state_events WHERE public_case_id = ?', CASE_ID).count, 3);
+  assert.equal(db.get('SELECT COUNT(*) AS count FROM state_events WHERE public_case_id = ?', CASE_ID).count, 4);
+  assert.equal(db.get('SELECT COUNT(*) AS count FROM autonomy_audit_log WHERE public_case_id = ?', CASE_ID).count >= 3, true);
   assert.equal(db.get('SELECT COUNT(*) AS count FROM dispatch_log WHERE public_case_id = ?', CASE_ID).count, 1);
 });
