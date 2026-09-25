@@ -191,11 +191,11 @@ test('cancelled or voided documented value is recognized as a successful outcome
   );
 });
 
-test('success fee is calculated server-side and only requested through an individual Stripe Checkout', () => {
-  assert.match(autopilot, /recovered < minValue/);
+test('legacy success-fee settlement remains server-side while initial autonomous acquisition uses case-check Checkout', () => {
   assert.match(autopilot, /createSuccessFeeCheckoutSession/);
+  assert.match(autopilot, /createCaseCheckCheckoutSession/);
   assert.match(autopilot, /stripe_checkout_session_id/);
-  assert.match(autopilot, /stage = 'PAYMENT_PENDING'/);
+  assert.match(autopilot, /CASE_CHECK_PAYMENT_PENDING/);
   assert.doesNotMatch(autopilot, /env\.PAYMENT_LINK/);
   assert.doesNotMatch(autopilot, /fixed success fee/i);
 });
