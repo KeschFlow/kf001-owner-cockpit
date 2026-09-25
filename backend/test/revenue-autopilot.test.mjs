@@ -11,7 +11,7 @@ const workerV3 = fs.readFileSync(path.join(here, '..', 'src', 'worker-v3.js'), '
 const wrangler = fs.readFileSync(path.join(here, '..', 'wrangler.toml'), 'utf8');
 const gmail = fs.readFileSync(path.join(here, '..', 'src', 'gmail.js'), 'utf8');
 
-test('revenue autopilot sends only a hard-qualified current winner and caps new outreach', () => {
+test('revenue autopilot sends only a hard-qualified current winner with one initial contact per case', () => {
   assert.match(autopilot, /e\.economically_qualified = 1/);
   assert.match(autopilot, /e\.economic_score >= \?1/);
   assert.match(autopilot, /e\.amount_approx_usd >= \?2/);
@@ -22,25 +22,27 @@ test('revenue autopilot sends only a hard-qualified current winner and caps new 
   assert.match(autopilot, /e\.uncertainty_score <= 55/);
   assert.match(autopilot, /hardAutoApproveRules\(row, env\)\.approved/);
   assert.match(autopilot, /LIMIT 20/);
-  assert.match(autopilot, /AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY/);
+  assert.doesNotMatch(autopilot, /AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY/);
+  assert.match(autopilot, /initialOutreachLimitPerCase: 1/);
+  assert.match(autopilot, /outreachCadence: '24_7'/);
   assert.match(autopilot, /AUTO_CONTACT_NOT_VERIFIED_PUBLIC/);
   assert.match(autopilot, /CASE_CHECK_OFFER_SENT/);
 });
 
-test('open customers are monitored in a bounded set without blocking daily acquisition', () => {
+test('open customers are monitored in a bounded set without blocking 24/7 acquisition', () => {
   assert.match(autopilot, /OPEN_STAGES/);
   assert.match(autopilot, /MAX_OPEN_CASES_PER_RUN = 25/);
   assert.match(autopilot, /const monitoring = await monitorOpenCases\(env, openCases, monitorCase\)/);
-  assert.match(autopilot, /const acquisition = await acquireDailyCandidate\(env, operations\)/);
+  assert.match(autopilot, /const acquisition = await acquireNextCandidate\(env, operations\)/);
   assert.doesNotMatch(autopilot, /if \(open\) return await monitorOpenCase/);
   assert.match(autopilot, /CLOSED_NO_RESPONSE/);
 });
 
-function cycleOperations({ openCases = [], quotaAvailable = true, winner = null, caseCheck = null, monitor, sendWinner, sendCaseCheck } = {}) {
+function cycleOperations({ openCases = [], winner = null, caseCheck = null, monitor, sendWinner, sendCaseCheck } = {}) {
   return {
     openAutopilotCases: async () => openCases,
     monitorOpenCase: monitor || (async (_, record) => ({ ok: true, action: 'WAITING_FOR_REPLY', caseId: record.public_case_id, stage: record.stage })),
-    dailyQuotaStatus: async () => ({ day: '2026-08-22', max: 1, sentCount: quotaAvailable ? 0 : 1, available: quotaAvailable }),
+    currentOwnerApprovedCase: async () => null,
     currentWinner: async () => winner,
     sendInitialOutreach: sendWinner || (async (_, row) => ({ ok: true, action: 'OUTREACH_SENT', caseId: row.public_case_id })),
     currentCaseCheckCandidate: async () => caseCheck,
@@ -48,7 +50,7 @@ function cycleOperations({ openCases = [], quotaAvailable = true, winner = null,
   };
 }
 
-test('case-check waiting case is monitored and a new qualified winner receives the one daily outreach', async () => {
+test('case-check waiting case is monitored and a new qualified winner can receive outreach at any hour', async () => {
   const monitored = [];
   let outreach = 0;
   const result = await REVENUE_AUTOPILOT_INTERNALS.runAutopilotCycle({}, cycleOperations({
@@ -60,7 +62,6 @@ test('case-check waiting case is monitored and a new qualified winner receives t
   assert.deepEqual(monitored, ['CASE-A']);
   assert.equal(outreach, 1);
   assert.equal(result.acquisition.caseId, 'CASE-B');
-  assert.equal(result.acquisition.quota.max, 1);
 });
 
 test('two open cases with distinct inbound replies are both processed in one cycle', async () => {
@@ -70,7 +71,6 @@ test('two open cases with distinct inbound replies are both processed in one cyc
       { public_case_id: 'CASE-A', stage: 'OUTREACH_SENT', inbound: 'gmail-a' },
       { public_case_id: 'CASE-B', stage: 'TERMS_SENT', inbound: 'gmail-b' }
     ],
-    quotaAvailable: false,
     monitor: async (_, record) => {
       replies.add(record.inbound);
       return { ok: true, action: 'REPLY_RECORDED', caseId: record.public_case_id };
@@ -100,22 +100,23 @@ test('one monitor failure is isolated while other cases and safe acquisition con
   assert.equal(result.action, 'OUTREACH_SENT');
 });
 
-test('reached daily quota still monitors all open cases and sends no outreach', async () => {
+test('there is no global daily outreach stop; a qualified new case can still be selected after prior sends', async () => {
   let monitored = 0;
   let selected = 0;
   const operations = cycleOperations({
     openCases: [{ public_case_id: 'CASE-A' }, { public_case_id: 'CASE-B' }],
-    quotaAvailable: false,
-    monitor: async (_, record) => { monitored += 1; return { ok: true, action: 'WAITING_FOR_REPLY', caseId: record.public_case_id }; }
+    monitor: async (_, record) => { monitored += 1; return { ok: true, action: 'WAITING_FOR_REPLY', caseId: record.public_case_id }; },
+    sendWinner: async (_, row) => ({ ok: true, action: 'OUTREACH_SENT', caseId: row.public_case_id })
   });
   operations.currentWinner = async () => { selected += 1; return { public_case_id: 'CASE-C' }; };
   const result = await REVENUE_AUTOPILOT_INTERNALS.runAutopilotCycle({}, operations);
   assert.equal(monitored, 2);
-  assert.equal(selected, 0);
-  assert.equal(result.action, 'DAILY_OUTREACH_CAP_REACHED');
+  assert.equal(selected, 1);
+  assert.equal(result.action, 'OUTREACH_SENT');
+  assert.equal(result.acquisition.caseId, 'CASE-C');
 });
 
-test('borderline case-check candidates remain pending for owner review and never consume outreach quota', async () => {
+test('borderline case-check candidates remain pending for owner review and never send outreach', async () => {
   let outreach = 0;
   let checkout = 0;
   let replies = 0;
@@ -143,7 +144,7 @@ test('borderline case-check candidates remain pending for owner review and never
   assert.equal(replies, 1);
 });
 
-test('case-check payment waiting remains open and does not block another daily candidate', async () => {
+test('case-check payment waiting remains open and does not block another candidate', async () => {
   const result = await REVENUE_AUTOPILOT_INTERNALS.runAutopilotCycle({}, cycleOperations({
     openCases: [{ public_case_id: 'CASE-A', stage: 'CASE_CHECK_PAYMENT_PENDING' }],
     winner: { public_case_id: 'CASE-B' }
@@ -152,7 +153,7 @@ test('case-check payment waiting remains open and does not block another daily c
   assert.equal(result.acquisition.caseId, 'CASE-B');
 });
 
-test('success-fee payment waiting remains monitored and does not block another daily candidate', async () => {
+test('success-fee payment waiting remains monitored and does not block another candidate', async () => {
   const result = await REVENUE_AUTOPILOT_INTERNALS.runAutopilotCycle({}, cycleOperations({
     openCases: [{ public_case_id: 'CASE-A', stage: 'PAYMENT_PENDING' }],
     winner: { public_case_id: 'CASE-B' }
@@ -165,7 +166,6 @@ test('duplicate open rows are monitored at most once per cycle', async () => {
   let monitored = 0;
   const result = await REVENUE_AUTOPILOT_INTERNALS.runAutopilotCycle({}, cycleOperations({
     openCases: [{ public_case_id: 'CASE-A' }, { public_case_id: 'CASE-A' }],
-    quotaAvailable: false,
     monitor: async () => { monitored += 1; return { ok: true, action: 'WAITING_FOR_REPLY', caseId: 'CASE-A' }; }
   }));
   assert.equal(monitored, 1);
@@ -211,9 +211,9 @@ test('gmail module supports thread reads and replies for reply monitoring', () =
   assert.match(gmail, /sendGmailReply/);
 });
 
-test('production config enables the capped dynamic success-fee model', () => {
+test('production config enables 24/7 per-case outreach with bounded follow-up', () => {
   assert.match(wrangler, /REVENUE_AUTOPILOT_ENABLED = "true"/);
-  assert.match(wrangler, /AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY = "1"/);
+  assert.doesNotMatch(wrangler, /AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY/);
   assert.match(wrangler, /AUTOPILOT_AUTO_APPROVE_ENABLED = "true"/);
   assert.match(wrangler, /AUTOPILOT_FOLLOWUP_HOURS = "12"/);
   assert.match(wrangler, /AUTOPILOT_MAX_CONTACTS_PER_CASE = "2"/);
