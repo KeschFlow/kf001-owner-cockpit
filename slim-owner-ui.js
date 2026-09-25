@@ -2,6 +2,9 @@
   'use strict';
 
   const money = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' });
+  const config = () => globalThis.KF001_CONFIG || {};
+  const endpoint = (path) => `${String(config().apiBaseUrl || '').replace(/\/$/, '')}${path}`;
+  let autopilotStatus = null;
 
   function readStoredNumber(keys) {
     for (const key of keys) {
@@ -79,9 +82,19 @@
         <button id="slimOpenCaseBtn" type="button" class="w-full rounded-xl bg-slate-800 border border-slate-700 text-slate-100 text-sm font-black px-4 py-3">FALL ÖFFNEN</button>
       </section>
 
-      <section class="bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-xs text-slate-300">
-        <span class="text-slate-500 uppercase tracking-wider text-[9px]">Geldfluss</span>
-        <div class="mt-1 font-mono"><span id="slimTotal">0,00 €</span> realisiert · <span id="slimOpen">—</span> offen · <span id="slimNextMoney">—</span> nächster Eingang</div>
+      <section class="bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-xs text-slate-300 space-y-2">
+        <div class="flex items-center justify-between gap-3">
+          <span class="text-slate-500 uppercase tracking-wider text-[9px]">Geldfluss · D1/Stripe</span>
+          <button id="slimKillSwitchBtn" type="button" class="rounded-lg border px-2 py-1 text-[10px] font-black">VERSANDSTATUS …</button>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono">
+          <div><span class="block text-[9px] text-slate-500">KONTAKTE</span><strong id="slimContacts">—</strong></div>
+          <div><span class="block text-[9px] text-slate-500">CHECKOUTS</span><strong id="slimCheckouts">—</strong></div>
+          <div><span class="block text-[9px] text-slate-500">CHECKOUT-AUFRUFE</span><strong id="slimCheckoutViews">—</strong></div>
+          <div><span class="block text-[9px] text-slate-500">ZAHLUNGEN</span><strong id="slimPayments">—</strong></div>
+        </div>
+        <div class="font-mono"><span id="slimTotal">0,00 €</span> realisiert · <span id="slimOpen">0,00 €</span> offen</div>
+        <div id="slimAttention" class="hidden rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-amber-200"></div>
       </section>
 
       <section id="slimDecisionSlot"></section>
@@ -102,8 +115,11 @@
       openActiveCase();
     });
     document.getElementById('slimActionBtn')?.addEventListener('click', openCurrentAction);
+    document.getElementById('slimKillSwitchBtn')?.addEventListener('click', toggleKillSwitch);
 
     refreshSlimView();
+    refreshAutopilotStatus();
+    setInterval(refreshAutopilotStatus, 30000);
     let refreshPending = false;
     const observer = new MutationObserver(() => {
       if (refreshPending) return;
@@ -116,14 +132,93 @@
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
   }
 
-  function openActiveCase() {
-    if (document.getElementById('slimTopCase')?.dataset.workItemState !== 'active') return;
+  function hasActiveDecision() {
+    return document.getElementById('ownerGateContainer')?.dataset.workItemState === 'active';
+  }
+
+  function focusDecisionGate() {
     const gate = document.getElementById('ownerGateContainer');
-    if (gate) {
-      gate.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      gate.animate?.([{ outline: '2px solid rgba(245,158,11,.9)' }, { outline: '2px solid transparent' }], { duration: 900 });
-      return;
+    if (!gate || gate.dataset.workItemState !== 'active') return false;
+    gate.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    gate.animate?.(
+      [{ outline: '2px solid rgba(245,158,11,.95)' }, { outline: '2px solid transparent' }],
+      { duration: 900 }
+    );
+    return true;
+  }
+
+  async function refreshAutopilotStatus() {
+    const path = config().autopilotStatusPath || '/v1/autopilot/status';
+    if (!config().apiBaseUrl) return;
+    try {
+      const response = await fetch(endpoint(path), {
+        cache: 'no-store',
+        credentials: 'omit',
+        headers: { Accept: 'application/json' }
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `AUTOPILOT_STATUS_${response.status}`);
+      autopilotStatus = body;
+      refreshSlimView();
+    } catch {
+      autopilotStatus = null;
+      renderAutopilotControls();
     }
+  }
+
+  function renderAutopilotControls() {
+    const button = document.getElementById('slimKillSwitchBtn');
+    const attention = document.getElementById('slimAttention');
+    const sync = document.getElementById('slimSync');
+    if (button) {
+      const enabled = autopilotStatus?.outreachEnabled !== false;
+      button.textContent = enabled ? '⛔ VERSAND STOPPEN' : '▶ VERSAND AKTIVIEREN';
+      button.className = enabled
+        ? 'rounded-lg border border-rose-500/40 bg-rose-950/20 px-2 py-1 text-[10px] font-black text-rose-200'
+        : 'rounded-lg border border-emerald-500/40 bg-emerald-950/20 px-2 py-1 text-[10px] font-black text-emerald-200';
+    }
+    if (sync && autopilotStatus) {
+      sync.textContent = autopilotStatus.outreachEnabled === false ? 'VERSAND GESTOPPT' : 'SYSTEM AKTIV';
+      sync.className = autopilotStatus.outreachEnabled === false
+        ? 'text-[10px] font-mono text-rose-300 border border-rose-500/30 bg-rose-950/20 rounded-lg px-2 py-1'
+        : 'text-[10px] font-mono text-emerald-300 border border-emerald-500/30 bg-emerald-950/20 rounded-lg px-2 py-1';
+    }
+    if (attention) {
+      const count = Number(autopilotStatus?.ownerAttentionCount || 0);
+      attention.classList.toggle('hidden', count === 0);
+      attention.textContent = count > 0
+        ? `${count} Owner-Ereignis(se): ${autopilotStatus.attentionReason || 'Prüfung erforderlich'} · ${autopilotStatus.attentionCaseId || ''}`
+        : '';
+    }
+  }
+
+  async function toggleKillSwitch() {
+    if (!autopilotStatus) return;
+    const target = autopilotStatus.outreachEnabled === false;
+    const Adapter = globalThis.KF001_OWNER_AUTH?.OwnerAuthAdapter;
+    if (!Adapter) return;
+    const button = document.getElementById('slimKillSwitchBtn');
+    if (button) button.disabled = true;
+    try {
+      const owner = new Adapter();
+      const payload = { outreachEnabled: target };
+      const auth = await owner.createAssertion('AUTOPILOT_KILL_SWITCH', payload);
+      const response = await fetch(endpoint(config().autopilotKillSwitchPath || '/v1/autopilot/kill-switch'), {
+        method: 'POST',
+        credentials: 'omit',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, auth })
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `KILL_SWITCH_${response.status}`);
+      await refreshAutopilotStatus();
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  function openActiveCase() {
+    if (focusDecisionGate()) return;
     if (typeof globalThis.switchTab === 'function') globalThis.switchTab('cases');
   }
 
@@ -133,7 +228,7 @@
     const approve = document.getElementById('approveIntentBtn');
     const reject = document.getElementById('rejectIntentBtn');
     if (approve && reject && !approve.disabled) {
-      document.getElementById('ownerGateContainer')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      focusDecisionGate();
       return;
     }
     openActiveCase();
@@ -151,13 +246,15 @@
     const shell = document.getElementById('kfSlimOwner');
     if (!shell) return;
 
-    const total = readStoredNumber(['kf001_revenue_total', 'revenue_total']);
-    const open = readStoredNumber(['kf001_open_amount', 'open_amount']);
-    const next = readStoredNumber(['kf001_next_payment', 'next_payment']);
-
-    text('slimTotal', money.format(total ?? 0));
-    text('slimOpen', open == null ? '—' : money.format(open));
-    text('slimNextMoney', next == null ? '—' : money.format(next));
+    const total = Number(autopilotStatus?.realizedRevenueEur || 0);
+    const open = Number(autopilotStatus?.openAmountEur || 0);
+    text('slimTotal', money.format(total));
+    text('slimOpen', money.format(open));
+    text('slimContacts', autopilotStatus == null ? '—' : Number(autopilotStatus.contactsSent || 0));
+    text('slimCheckouts', autopilotStatus == null ? '—' : Number(autopilotStatus.checkoutCreated || 0));
+    text('slimCheckoutViews', autopilotStatus == null ? '—' : Number(autopilotStatus.checkoutViews || 0));
+    text('slimPayments', autopilotStatus == null ? '—' : Number(autopilotStatus.paymentsReceived || 0));
+    renderAutopilotControls();
 
     const gate = document.getElementById('ownerGateContainer');
     const decisionSlot = document.getElementById('slimDecisionSlot');
@@ -167,8 +264,9 @@
     const authSlot = document.getElementById('slimAuthSlot');
     if (auth && authSlot && auth.parentElement !== authSlot) authSlot.appendChild(auth);
     if (auth) {
-      const needsAction = Boolean(auth.querySelector('#registerPasskeyBtn') || auth.querySelector('#verifyPasskeyBtn'));
-      auth.style.display = needsAction ? '' : 'none';
+      const needsAction = Boolean(auth.querySelector('#registerPasskeyBtn'));
+      const verified = auth.dataset.ownerVerified === 'true';
+      auth.style.display = needsAction || (!verified && auth.querySelector('#verifyPasskeyBtn') && !hasActiveDecision()) ? '' : 'none';
     }
 
     const gateText = gate?.textContent || '';
@@ -211,7 +309,10 @@
     if (!action || !actionBtn) return;
 
     actionBtn.classList.add('hidden');
-    if (document.getElementById('registerPasskeyBtn')) {
+    if (Number(autopilotStatus?.ownerAttentionCount || 0) > 0) {
+      text('slimNextAction', `Owner-Eingriff: ${autopilotStatus.attentionReason || 'Antwort/Zahlung/Risiko'} · ${autopilotStatus.attentionCaseId || ''}`);
+      action.className = 'mt-1 text-sm font-bold text-amber-300';
+    } else if (document.getElementById('registerPasskeyBtn')) {
       text('slimNextAction', 'Owner-Passkey registrieren, damit Entscheidungen gespeichert werden können.');
       action.className = 'mt-1 text-sm font-bold text-amber-300';
       text('slimActionBtn', 'PASSKEY REGISTRIEREN');
@@ -237,6 +338,10 @@
       actionBtn.classList.remove('hidden');
     }
   }
+
+  globalThis.addEventListener('kf001:owner-verified', () => {
+    requestAnimationFrame(() => focusDecisionGate());
+  });
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', installSlimShell, { once: true });
