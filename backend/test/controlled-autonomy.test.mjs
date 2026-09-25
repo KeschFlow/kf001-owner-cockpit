@@ -13,6 +13,7 @@ const migration = fs.readFileSync(path.join(here, '..', 'migrations', '0014_cont
 
 const env = {
   REVENUE_AUTOPILOT_ENABLED: 'true',
+  AUTOPILOT_AUTO_APPROVE_ENABLED: 'true',
   AUTOPILOT_MIN_ECONOMIC_SCORE: '72',
   AUTOPILOT_MIN_VALUE_USD: '8000',
   GMAIL_CLIENT_ID: 'id',
