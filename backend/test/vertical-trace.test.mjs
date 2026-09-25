@@ -102,7 +102,24 @@ class SqliteD1 {
 }
 
 function applyAllMigrations(db) {
-  applyAllMigrations(db);
+  for (const name of [
+    '0001_initial.sql',
+    '0002_owner_webauthn.sql',
+    '0003_gmail_dispatch.sql',
+    '0004_real_radar.sql',
+    '0005_radar_provenance.sql',
+    '0006_retire_legacy_test_case.sql',
+    '0007_dispatch_hardening.sql',
+    '0008_economic_selection.sql',
+    '0009_release_terminal_owner_gate.sql',
+    '0010_revenue_autopilot.sql',
+    '0011_dynamic_success_fee_checkout.sql',
+    '0012_case_check_offer.sql',
+    '0013_state_events_audit_context.sql',
+    '0014_controlled_autonomy.sql'
+  ]) {
+    db.execMigration(name);
+  }
 }
 
 function intakeRequest() {
