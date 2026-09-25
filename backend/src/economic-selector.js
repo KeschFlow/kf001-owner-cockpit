@@ -364,7 +364,7 @@ export async function selectBestEconomicCandidate(env) {
     : null;
   if (active?.public_case_id === caseId) {
     await env.CASE_DB.prepare(`
-      UPDATE cases SET case_value_score = ?2, recommendation = ?3, version = version + 1, updated_at = ?4
+      UPDATE cases SET case_value_score = ?2, recommendation = ?3, updated_at = ?4
       WHERE public_case_id = ?1 AND status = 'PENDING_APPROVAL'
     `).bind(caseId, winner.score.economicScore, recommendation, now).run();
     await persistScore(env, caseId, winner.score, now);
