@@ -155,10 +155,20 @@ class CaseStoreAdapter {
     if (!['APPROVE', 'REJECT'].includes(decision)) throw new Error('Ungültige Owner-Entscheidung');
     if (!caseId) throw new Error('NO_ACTIVE_CASE');
 
+    let authoritativeVersion = Number(version || 0);
+    if (this.centralBackendConnected) {
+      const fresh = await this.loadOwnerState();
+      if (!fresh?.isSourceOfTruth || fresh?.caseId !== caseId || !['PENDING_APPROVAL', 'APPROVED_PENDING_DISPATCH'].includes(fresh?.status)) {
+        throw new Error('CASE_CHANGED_RELOAD');
+      }
+      authoritativeVersion = Number(fresh.version || 0);
+    }
+    if (!Number.isInteger(authoritativeVersion) || authoritativeVersion < 1) throw new Error('INVALID_EXPECTED_VERSION');
+
     const localStatus = decision === 'APPROVE'
       ? CASE_STATUSES.APPROVED_PENDING_DISPATCH
       : CASE_STATUSES.REJECTED;
-    const intent = { caseId, decision, expectedVersion: version, requestedAt: new Date().toISOString() };
+    const intent = { caseId, decision, expectedVersion: authoritativeVersion, requestedAt: new Date().toISOString() };
     const url = config().approvalIntentConnected
       ? endpoint(config().approvalIntentPath || '/v1/approval-intents')
       : '';
