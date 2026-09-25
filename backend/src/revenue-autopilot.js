@@ -689,31 +689,6 @@ function autoContactAllowed(row) {
     .includes(String(row?.contact_route || ''));
 }
 
-async function claimDailyQuota(env) {
-  const max = Math.max(1, Math.floor(numericEnv(env, 'AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY', 1)));
-  const day = nowIso().slice(0, 10);
-  await env.CASE_DB.prepare(`
-    INSERT OR IGNORE INTO revenue_autopilot_quota (quota_day, sent_count, updated_at)
-    VALUES (?1, 0, ?2)
-  `).bind(day, nowIso()).run();
-  const result = await env.CASE_DB.prepare(`
-    UPDATE revenue_autopilot_quota
-       SET sent_count = sent_count + 1, updated_at = ?3
-     WHERE quota_day = ?1 AND sent_count < ?2
-  `).bind(day, max, nowIso()).run();
-  return Number(result.meta?.changes || 0) === 1;
-}
-
-async function dailyQuotaStatus(env) {
-  const max = Math.max(1, Math.floor(numericEnv(env, 'AUTOPILOT_MAX_NEW_OUTREACH_PER_DAY', 1)));
-  const day = nowIso().slice(0, 10);
-  const row = await env.CASE_DB.prepare(`
-    SELECT sent_count FROM revenue_autopilot_quota WHERE quota_day = ?1
-  `).bind(day).first();
-  const sentCount = Math.max(0, Number(row?.sent_count || 0));
-  return { day, max, sentCount, available: sentCount < max };
-}
-
 async function sendInitialOutreach(env, row) {
   await appendAutonomyAudit(env, {
     caseId: row?.public_case_id || null,
@@ -786,8 +761,6 @@ async function sendCaseCheckOffer(env, row, {
     });
     return { ok: true, action: 'PENDING_OWNER_REVIEW', caseId: row.public_case_id, reasons: preflight.reasons };
   }
-
-  if (!(await claimDailyQuota(env))) return { ok: true, action: 'DAILY_OUTREACH_CAP_REACHED', caseId: row.public_case_id };
 
   const subject = clean(row.subject || 'Platform/Billing Case Check for your public report', 300);
   const claimedAt = nowIso();
@@ -1183,8 +1156,7 @@ async function monitorOpenCases(env, records, monitor = monitorOpenCase) {
   };
 }
 
-async function acquireDailyCandidate(env, operations = {}) {
-  const quotaStatus = operations.dailyQuotaStatus || dailyQuotaStatus;
+async function acquireNextCandidate(env, operations = {}) {
   const selectOwnerApproved = operations.currentOwnerApprovedCase || currentOwnerApprovedCase;
   const selectWinner = operations.currentWinner || currentWinner;
   const sendWinner = operations.sendInitialOutreach || sendCaseCheckOffer;
@@ -1192,31 +1164,22 @@ async function acquireDailyCandidate(env, operations = {}) {
   const sendCaseCheck = operations.sendCaseCheckOffer || sendCaseCheckOffer;
   const replyMonitoringAvailable = operations.replyMonitoringAvailable !== false;
 
-  const quota = await quotaStatus(env);
-  if (!quota.available) return { ok: true, action: 'DAILY_OUTREACH_CAP_REACHED', quota };
-
   const ownerApproved = await selectOwnerApproved(env);
   if (ownerApproved) {
-    return {
-      ...(await sendCaseCheck(env, ownerApproved, { replyMonitoringAvailable, manualApproved: true })),
-      quota
-    };
+    return sendCaseCheck(env, ownerApproved, { replyMonitoringAvailable, manualApproved: true });
   }
 
   const winner = await selectWinner(env);
   if (winner) {
-    return {
-      ...(await sendWinner(env, winner, { replyMonitoringAvailable, manualApproved: false })),
-      quota
-    };
+    return sendWinner(env, winner, { replyMonitoringAvailable, manualApproved: false });
   }
 
   const caseCheckCandidate = await selectCaseCheck(env);
   if (caseCheckCandidate) {
-    return { ok: true, action: 'PENDING_OWNER_REVIEW', caseId: caseCheckCandidate.public_case_id, quota };
+    return { ok: true, action: 'PENDING_OWNER_REVIEW', caseId: caseCheckCandidate.public_case_id };
   }
 
-  return { ok: true, action: 'NO_WINNER', quota };
+  return { ok: true, action: 'NO_WINNER' };
 }
 
 async function runAutopilotCycle(env, operations = {}) {
@@ -1224,7 +1187,7 @@ async function runAutopilotCycle(env, operations = {}) {
   const monitorCase = operations.monitorOpenCase || monitorOpenCase;
   const openCases = await loadOpenCases(env, MAX_OPEN_CASES_PER_RUN);
   const monitoring = await monitorOpenCases(env, openCases, monitorCase);
-  const acquisition = await acquireDailyCandidate(env, operations);
+  const acquisition = await acquireNextCandidate(env, operations);
   return {
     ok: monitoring.failed === 0 && acquisition.ok !== false,
     enabled: true,
@@ -1242,7 +1205,6 @@ export async function revenueAutopilotStatus(env) {
     SELECT * FROM revenue_autopilot ORDER BY updated_at DESC LIMIT 1
   `).first();
   const pricing = successFeeConfig(env);
-  const quota = await dailyQuotaStatus(env);
   const common = {
     enabled: enabled(env),
     pricingModel: 'DYNAMIC_SUCCESS_FEE',
@@ -1256,9 +1218,9 @@ export async function revenueAutopilotStatus(env) {
     openCaseBlocksNewLead: false,
     openCaseCount: openCases.length,
     maxOpenCasesPerRun: MAX_OPEN_CASES_PER_RUN,
-    dailyNewOutreachCap: quota.max,
-    dailyNewOutreachSent: quota.sentCount,
-    newOutreachAllowedToday: quota.available
+    outreachCadence: '24_7',
+    initialOutreachLimitPerCase: 1,
+    globalDailyOutreachCap: null
   };
   return latest
     ? { ...common, stage: latest.stage, paymentStatus: latest.payment_status || null }
@@ -1293,9 +1255,8 @@ export const REVENUE_AUTOPILOT_INTERNALS = Object.freeze({
   ,caseCheckMessage,
   currentCaseCheckCandidate,
   openAutopilotCases,
-  dailyQuotaStatus,
   monitorOpenCases,
-  acquireDailyCandidate,
+  acquireNextCandidate,
   runAutopilotCycle,
   MAX_OPEN_CASES_PER_RUN
 });
