@@ -466,7 +466,8 @@ test('global kill switch blocks a hard-qualified case before Gmail outreach', as
   };
 
   const intake = await handleRadarIntakeRequest(intakeRequest(), env);
-  assert.equal(intake.status, 201);
+  const intakeBody = await intake.clone().json().catch(() => ({}));
+  assert.equal(intake.status, 201, JSON.stringify(intakeBody));
   db.sqlite.prepare(`
     UPDATE autonomy_control
        SET outreach_enabled = 0, updated_by = 'TEST_KILL', updated_at = CURRENT_TIMESTAMP
