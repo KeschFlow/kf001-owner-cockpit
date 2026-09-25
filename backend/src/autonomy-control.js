@@ -200,6 +200,7 @@ export function hardAutoApproveRules(row, env = {}) {
   const titleAndExcerpt = `${row?.source_title || ''}\n${row?.source_excerpt || ''}`;
 
   if (String(env.REVENUE_AUTOPILOT_ENABLED || '').toLowerCase() !== 'true') reasons.push('AUTOPILOT_DISABLED');
+  if (String(env.AUTOPILOT_AUTO_APPROVE_ENABLED || '').toLowerCase() !== 'true') reasons.push('AUTO_APPROVE_DISABLED');
   if (Number(row?.economically_qualified || 0) !== 1) reasons.push('ECONOMICALLY_NOT_QUALIFIED');
   if (Number(row?.economic_score || 0) < minScore) reasons.push('ECONOMIC_SCORE_BELOW_MINIMUM');
   if (Number(row?.amount_approx_usd || 0) < minValue) reasons.push('ECONOMIC_VALUE_BELOW_MINIMUM');
