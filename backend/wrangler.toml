@@ -39,7 +39,7 @@ required = [
 ]
 
 [triggers]
-crons = ["17 */3 * * *"]
+crons = ["17 * * * *"]
 
 [[d1_databases]]
 binding = "CASE_DB"
