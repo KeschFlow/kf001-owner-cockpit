@@ -120,16 +120,10 @@
     refreshSlimView();
     refreshAutopilotStatus();
     setInterval(refreshAutopilotStatus, 30000);
-    let refreshPending = false;
-    const observer = new MutationObserver(() => {
-      if (refreshPending) return;
-      refreshPending = true;
-      requestAnimationFrame(() => {
-        refreshPending = false;
-        refreshSlimView();
-      });
-    });
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    // Avoid a self-triggering MutationObserver loop: refreshSlimView() itself updates
+    // text/classes, which previously retriggered the observer continuously and could
+    // freeze the installed PWA/browser tab. A light periodic refresh is sufficient.
+    setInterval(() => refreshSlimView(), 1500);
   }
 
   function hasActiveDecision() {
