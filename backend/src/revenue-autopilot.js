@@ -43,6 +43,7 @@ const CLOSED_STAGES = new Set([
   'CLOSED_NOT_INTERESTED',
   'CLOSED_NO_RESPONSE',
   'CLOSED_OTHER',
+  'CASE_CHECK_FULFILLED',
   'PAID'
 ]);
 
@@ -208,21 +209,94 @@ function caseCheckMessage(row, checkoutUrl, amountEur) {
     '',
     `I found your public platform/billing report: “${clean(row.source_title, 240)}”.`,
     '',
-    `I can turn the available material into a focused Platform/Billing Case Check for EUR ${amountEur.toFixed(2)}. It includes:`,
-    '1. reconstructed timeline and strongest provable facts,',
-    '2. missing evidence and weak points,',
+    `KeschFlow can generate an automated Public Record Case Check for EUR ${amountEur.toFixed(2)}. It includes:`,
+    '1. a concise reconstruction of the public record,',
+    '2. an evidence/solvability scorecard and the main gaps,',
     '3. the smallest credible escalation route,',
-    '4. a ready-to-send escalation letter.',
+    '4. a ready-to-send escalation template.',
     '',
-    'No passwords, API keys or account access are required. This is structured case and escalation support, not legal representation, and no outcome is guaranteed.',
+    'The report is generated only from the public material already identified by KeschFlow. No passwords, API keys, account access or document upload are required. It is structured case and escalation support, not legal representation, and no outcome is guaranteed.',
     '',
     `Individual Stripe Checkout: ${checkoutUrl}`,
     '',
-    'After payment, reply to this email with the invoices, support case IDs, key messages, important dates and desired outcome. Do not send credentials.',
+    'After confirmed payment, the report is delivered automatically to this email. No manual follow-up is required to receive it.',
     '',
     'If this is resolved or not relevant, reply NO and I will close the case. If there is no reply or payment, I may send one reminder before this checkout expires; there will be no further unsolicited follow-up.',
     '',
     'KeschFlow'
+  ].join('\n');
+}
+
+function caseCheckReport(row) {
+  const title = clean(row.source_title, 240) || 'Public platform/billing report';
+  const excerpt = clean(row.source_excerpt, 1600) || 'No additional public excerpt was available.';
+  const amount = Number(row.amount_approx_usd || 0);
+  const amountLine = amount > 0
+    ? `Approximate disputed/recoverable value identified from the public record: USD ${amount.toFixed(2)}.`
+    : 'No reliable monetary amount could be extracted from the public record.';
+
+  const scores = [
+    ['Economic fit', Number(row.economic_score || 0)],
+    ['Solvability', Number(row.solvability_score || 0)],
+    ['Reachability', Number(row.reachability_score || 0)],
+    ['Evidence', Number(row.evidence_score || 0)],
+    ['Platform acknowledgement', Number(row.platform_ack_score || 0)],
+    ['Recoverable value', Number(row.recoverable_value_score || 0)],
+    ['Effort', Number(row.effort_score || 0)],
+    ['Uncertainty', Number(row.uncertainty_score || 0)]
+  ];
+
+  const gaps = [];
+  if (Number(row.evidence_score || 0) < 70) gaps.push('Preserve stronger dated evidence: invoices, support IDs, screenshots, exports and payment references.');
+  if (Number(row.platform_ack_score || 0) < 60) gaps.push('Obtain a written platform acknowledgement or a written billing/support decision.');
+  if (Number(row.reachability_score || 0) < 75) gaps.push('Use a verified billing/support/escalation contact rather than a generic or unverified route.');
+  if (Number(row.uncertainty_score || 0) > 45) gaps.push('Reduce ambiguity by separating confirmed facts from assumptions and by fixing the chronology.');
+  if (!gaps.length) gaps.push('The public record is comparatively strong; keep the chronology and evidence bundle compact and consistent.');
+
+  const templateAmount = amount > 0 ? `USD ${amount.toFixed(2)}` : '[disputed amount]';
+
+  return [
+    'KESCHFLOW — PUBLIC RECORD CASE CHECK',
+    '',
+    `Case: ${title}`,
+    amountLine,
+    '',
+    'PUBLIC RECORD SUMMARY',
+    excerpt,
+    '',
+    'SCORECARD (0–100)',
+    ...scores.map(([label, value]) => `- ${label}: ${Math.max(0, Math.min(100, Math.round(value)))}`),
+    '',
+    'MAIN GAPS / NEXT EVIDENCE',
+    ...gaps.map((gap, index) => `${index + 1}. ${gap}`),
+    '',
+    'SMALLEST CREDIBLE ESCALATION ROUTE',
+    '1. Freeze the chronology: anomaly/charge date, containment date, support contacts, platform decisions and current status.',
+    '2. Attach only the strongest proof: invoice/payment reference, support case ID, relevant usage/export and the clearest platform response.',
+    '3. Send one written escalation to the verified billing/support route and request a written decision tied to the exact disputed amount.',
+    '4. Ask for the exact remedy sought (refund, credit, cancellation or correction) and a written explanation if refused.',
+    '5. Do not send passwords, API keys, recovery codes or live credentials.',
+    '',
+    'READY-TO-SEND ESCALATION TEMPLATE',
+    'Subject: Request for documented review of disputed platform/billing amount',
+    '',
+    'Hello,',
+    '',
+    `I am requesting a documented review of a disputed platform/billing issue involving approximately ${templateAmount}.`,
+    'The relevant public/support record has been consolidated into a dated chronology with the key billing and support references.',
+    '',
+    'Please confirm in writing:',
+    '1. the transactions/usage you consider valid,',
+    '2. the basis for any amount you decline to refund, credit, cancel or correct,',
+    '3. the final escalation route if this team cannot resolve the issue.',
+    '',
+    'Requested outcome: [refund / credit / cancellation / correction].',
+    '',
+    'Regards,',
+    '[Name]',
+    '',
+    'SCOPE',
+    'This automated report uses the public material already identified by KeschFlow. It is not legal representation, does not guarantee an outcome, and does not require account credentials.'
   ].join('\n');
 }
 
@@ -997,7 +1071,8 @@ async function loadSafetyRow(env, caseId) {
   return env.CASE_DB.prepare(`
     SELECT c.public_case_id,
            e.economic_score, e.amount_approx_usd, e.economically_qualified, e.selected_at,
-           e.solvability_score, e.reachability_score, e.evidence_score, e.effort_score, e.uncertainty_score,
+           e.solvability_score, e.reachability_score, e.evidence_score, e.platform_ack_score,
+           e.recoverable_value_score, e.effort_score, e.uncertainty_score,
            a.recipient_email, a.recipient_name, a.subject,
            r.source_title, r.source_excerpt, r.contact_route
       FROM cases c
@@ -1006,6 +1081,66 @@ async function loadSafetyRow(env, caseId) {
       JOIN radar_candidates r ON r.public_case_id = c.public_case_id
      WHERE c.public_case_id = ?1
   `).bind(caseId).first();
+}
+
+async function deliverPaidCaseCheck(env, record) {
+  const safetyRow = await loadSafetyRow(env, record.public_case_id);
+  if (!safetyRow) return { ok: false, reason: 'CASE_CHECK_SOURCE_NOT_FOUND', caseId: record.public_case_id };
+
+  const report = caseCheckReport(safetyRow);
+  let sent;
+  try {
+    sent = await sendGmailReply(env, {
+      to: record.recipient_email,
+      subject: `Your KeschFlow Public Record Case Check — ${clean(safetyRow.source_title, 140) || record.public_case_id}`,
+      text: report,
+      threadId: record.gmail_thread_id
+    });
+  } catch (error) {
+    const code = clean(error?.message || 'CASE_CHECK_DELIVERY_FAILED', 120);
+    await env.CASE_DB.prepare(`
+      UPDATE revenue_autopilot
+         SET error_code = ?2, owner_attention_reason = 'CASE_CHECK_DELIVERY_RETRY', updated_at = ?3
+       WHERE public_case_id = ?1 AND stage = 'CASE_CHECK_PAID_AWAITING_EVIDENCE'
+    `).bind(record.public_case_id, code, nowIso()).run();
+    return { ok: false, reason: code, caseId: record.public_case_id };
+  }
+
+  const at = nowIso();
+  await env.CASE_DB.batch([
+    env.CASE_DB.prepare(`
+      UPDATE revenue_autopilot
+         SET stage = 'CASE_CHECK_FULFILLED', owner_attention_reason = NULL, error_code = NULL, updated_at = ?2
+       WHERE public_case_id = ?1 AND stage = 'CASE_CHECK_PAID_AWAITING_EVIDENCE'
+    `).bind(record.public_case_id, at),
+    env.CASE_DB.prepare(`
+      UPDATE cases
+         SET status = 'DISPATCHED', is_active = 0, version = version + 1, updated_at = ?2
+       WHERE public_case_id = ?1
+    `).bind(record.public_case_id, at),
+    env.CASE_DB.prepare(`
+      INSERT OR IGNORE INTO dispatch_log (
+        public_case_id, provider, provider_message_id, recipient_email, status, error_code, created_at
+      ) VALUES (?1, 'GMAIL_AUTOPILOT', ?2, ?3, 'SENT', NULL, ?4)
+    `).bind(record.public_case_id, sent.id, record.recipient_email, at),
+    env.CASE_DB.prepare(`
+      INSERT INTO state_events (
+        public_case_id, event_type, state, source,
+        previous_state, actor_ref, request_key, created_at
+      ) VALUES (?1, 'CASE_CHECK_FULFILLED', 'DISPATCHED', 'REVENUE_AUTOPILOT',
+                'RESPONSE_RECEIVED', 'REVENUE_AUTOPILOT', ?2, ?3)
+    `).bind(record.public_case_id, sent.id, at)
+  ]);
+  await appendAutonomyAudit(env, {
+    caseId: record.public_case_id,
+    eventType: 'CASE_CHECK_FULFILLED',
+    decision: 'AUTOMATIC_PAID_DELIVERY',
+    message: report,
+    recipientEmail: record.recipient_email,
+    providerMessageId: sent.id,
+    context: { product: 'CASE_CHECK_49', automatedDelivery: true }
+  });
+  return { ok: true, action: 'CASE_CHECK_FULFILLED', caseId: record.public_case_id };
 }
 
 async function monitorOpenCase(env, record) {
@@ -1020,6 +1155,10 @@ async function monitorOpenCase(env, record) {
       WHERE public_case_id = ?1 AND stage NOT IN ('PAYMENT_PENDING')
     `).bind(record.public_case_id, code, nowIso()).run();
     return { ok: false, reason: code, caseId: record.public_case_id };
+  }
+
+  if (record.stage === 'CASE_CHECK_PAID_AWAITING_EVIDENCE') {
+    return deliverPaidCaseCheck(env, record);
   }
 
   const messages = inboundMessages(thread, record.recipient_email, record.initial_sent_at);
@@ -1253,6 +1392,8 @@ export const REVENUE_AUTOPILOT_INTERNALS = Object.freeze({
   paymentMessage,
   requestDynamicPayment
   ,caseCheckMessage,
+  caseCheckReport,
+  deliverPaidCaseCheck,
   currentCaseCheckCandidate,
   openAutopilotCases,
   monitorOpenCases,
