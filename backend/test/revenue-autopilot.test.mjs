@@ -153,6 +153,37 @@ test('case-check payment waiting remains open and does not block another candida
   assert.equal(result.acquisition.caseId, 'CASE-B');
 });
 
+
+test('paid case-check product is sold as automatic public-record fulfillment', () => {
+  assert.match(autopilot, /automated Public Record Case Check/);
+  assert.match(autopilot, /delivered automatically to this email/);
+  assert.match(autopilot, /CASE_CHECK_PAID_AWAITING_EVIDENCE/);
+  assert.match(autopilot, /CASE_CHECK_FULFILLED/);
+  assert.match(autopilot, /AUTOMATIC_PAID_DELIVERY/);
+});
+
+test('automatic case-check report contains a bounded scorecard, gaps and escalation template', () => {
+  const report = REVENUE_AUTOPILOT_INTERNALS.caseCheckReport({
+    source_title: 'Cloud billing dispute',
+    source_excerpt: 'Public report with invoice, support case and disputed USD 860 charge.',
+    amount_approx_usd: 860,
+    economic_score: 64,
+    solvability_score: 70,
+    reachability_score: 82,
+    evidence_score: 61,
+    platform_ack_score: 50,
+    recoverable_value_score: 24,
+    effort_score: 40,
+    uncertainty_score: 38
+  });
+  assert.match(report, /PUBLIC RECORD CASE CHECK/);
+  assert.match(report, /SCORECARD \(0–100\)/);
+  assert.match(report, /MAIN GAPS \/ NEXT EVIDENCE/);
+  assert.match(report, /READY-TO-SEND ESCALATION TEMPLATE/);
+  assert.match(report, /USD 860\.00/);
+  assert.match(report, /not legal representation/);
+});
+
 test('success-fee payment waiting remains monitored and does not block another candidate', async () => {
   const result = await REVENUE_AUTOPILOT_INTERNALS.runAutopilotCycle({}, cycleOperations({
     openCases: [{ public_case_id: 'CASE-A', stage: 'PAYMENT_PENDING' }],
