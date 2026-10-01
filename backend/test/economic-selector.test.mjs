@@ -13,7 +13,7 @@ test('approved credits plus bank mismatch rank as a strong economic case', () =>
   const score = scoreEconomicCandidate({
     source_title: 'Company still missing cash after Google Gemini billing incident',
     source_excerpt: 'Flexibel AB reports SEK 200,000 unauthorized Gemini API usage. Five support cases exist. Google issued credit notes of about SEK 191,000 and an approved refund, but money has not reached the company bank account. Cost anomaly alert, invoices, bank statements, support case IDs and Trust & Safety classification are available. The founder says the case remains unresolved.',
-    contact_email: 'info@example-company.se',
+    contact_email: 'info@flexibel-ab.test',
     contact_route: 'PUBLIC_WEBSITE_MAILTO',
     author_name: 'Company Founder',
     evidence_score: 92,
@@ -48,7 +48,7 @@ test('economic score rewards acknowledged recoverability over raw damage alone',
   const acknowledged = scoreEconomicCandidate({
     source_title: 'Business refund approved but not settled',
     source_excerpt: 'Company LLC has USD 18,000 disputed billing. Support case ID exists, refund approved, credit memo issued, invoices and bank statement available, but settlement is still unresolved.',
-    contact_email: 'finance@company.example',
+    contact_email: 'finance@acknowledged-company.test',
     contact_route: 'PUBLIC_WEBSITE_MAILTO',
     author_name: 'Owner',
     evidence_score: 88,
@@ -76,7 +76,7 @@ test('existing case-check thresholds accept a smaller documented case without ca
   const score = scoreEconomicCandidate({
     source_title: 'Business account has unresolved platform auto-charge discrepancy',
     source_excerpt: 'A company developer documents USD 860 in disputed auto-charges and an unexplained balance. The public report includes invoices, screenshots, transaction dates, a support case and a timeline, and remains unresolved after billing support contact.',
-    contact_email: 'billing@company.example',
+    contact_email: 'billing@case-check-company.test',
     contact_route: 'PUBLIC_POST_EMAIL',
     author_name: 'Business account owner',
     evidence_score: 75,

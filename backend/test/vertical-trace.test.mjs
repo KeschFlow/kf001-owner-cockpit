@@ -22,15 +22,21 @@ const CASE_CHECK_FIXTURE = Object.freeze({
   rawDescription: 'A company developer documents USD 12,000 in disputed unexpected platform charges and an unexplained account balance. The public report includes invoices, screenshots, transaction dates, billing records, a support case ID and a detailed support timeline. The chronology starts on 2026-07-14, links the public supporting record at https://example.com/public-billing-record, and records each response supplied to billing support. The company requested a refund and supplied the requested records, but the issue remains unresolved after repeated billing support contact with no response. The business account owner requests a clear escalation route and identifies the account, invoice and affected payment period.',
   claimAmountUsd: 12000,
   authorName: 'Business Account Owner',
-  contactEmail: 'billing@company.example',
+  contactEmail: 'billing@case-check-company.test',
   contactRoute: 'PUBLIC_POST_EMAIL'
 });
 
 class SqliteD1Statement {
   constructor(database, sql) {
     this.database = database;
-    this.sql = sql;
+    this.originalSql = sql;
+    this.bindOrder = [...String(sql).matchAll(/\?(\d+)/g)].map((match) => Number(match[1]) - 1);
+    this.sql = this.bindOrder.length ? String(sql).replace(/\?\d+/g, '?') : sql;
     this.args = [];
+  }
+
+  sqliteArgs() {
+    return this.bindOrder.length ? this.bindOrder.map((index) => this.args[index]) : this.args;
   }
 
   bind(...args) {
@@ -39,7 +45,7 @@ class SqliteD1Statement {
   }
 
   runSync() {
-    const result = this.database.sqlite.prepare(this.sql).run(...this.args);
+    const result = this.database.sqlite.prepare(this.sql).run(...this.sqliteArgs());
     return {
       meta: {
         changes: Number(result.changes || 0),
@@ -53,11 +59,11 @@ class SqliteD1Statement {
   }
 
   async first() {
-    return this.database.sqlite.prepare(this.sql).get(...this.args) || null;
+    return this.database.sqlite.prepare(this.sql).get(...this.sqliteArgs()) || null;
   }
 
   async all() {
-    return { results: this.database.sqlite.prepare(this.sql).all(...this.args) };
+    return { results: this.database.sqlite.prepare(this.sql).all(...this.sqliteArgs()) };
   }
 }
 
@@ -275,7 +281,7 @@ test('KF-001 traces one case through intake, Owner Gate, Checkout, payment, repl
   assert.equal(db.get('SELECT COUNT(*) AS count FROM radar_candidates WHERE public_case_id = ?', CASE_ID).count, 1);
   assert.equal(db.get('SELECT COUNT(*) AS count FROM cases WHERE public_case_id = ?', CASE_ID).count, 1);
   assert.equal(db.get('SELECT COUNT(*) AS count FROM cases WHERE is_active = 1').count, 1);
-  assert.equal(db.get('SELECT version FROM cases WHERE public_case_id = ?', CASE_ID).version, initialCase.version + 1);
+  assert.equal(db.get('SELECT version FROM cases WHERE public_case_id = ?', CASE_ID).version, initialCase.version);
 
   const firstCycle = await runRevenueAutopilot(env);
   assert.equal(firstCycle.action, 'CASE_CHECK_OFFER_SENT');

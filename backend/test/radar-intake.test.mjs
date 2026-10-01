@@ -12,7 +12,7 @@ const QUALIFIED = Object.freeze({
   claimAmountUsd: 18596.35,
   targetEntity: 'Cloud platform billing',
   authorName: 'Public App Developer',
-  contactEmail: 'support@example.test',
+  contactEmail: 'support@qualified-company.test',
   contactRoute: 'PUBLIC_APP_SUPPORT_EMAIL'
 });
 
@@ -35,7 +35,7 @@ const CASE_CHECK = Object.freeze({
   rawDescription: 'A company developer documents USD 860 in disputed unexpected platform charges and an unexplained account balance. The public report includes invoices, screenshots, transaction dates, billing records, a support case ID and a detailed support timeline. The chronology starts on 2026-07-14, links the public supporting record at https://example.com/public-billing-record, and records each response supplied to billing support. The company requested a refund and supplied the requested records, but the issue remains unresolved after repeated billing support contact with no response. The business account owner requests a clear escalation route and identifies the account, invoice and affected payment period.',
   claimAmountUsd: 860,
   authorName: 'Business Account Owner',
-  contactEmail: 'billing@company.example',
+  contactEmail: 'billing@case-check-company.test',
   contactRoute: 'PUBLIC_POST_EMAIL'
 });
 
