@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kf001-owner-cockpit-v15-instant-shell';
+const CACHE_NAME = 'kf001-owner-cockpit-v16-owner-snapshot';
 const APP_SHELL = [
   './',
   './index.html',
