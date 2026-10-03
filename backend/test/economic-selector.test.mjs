@@ -89,3 +89,21 @@ test('existing case-check thresholds accept a smaller documented case without ca
   assert.equal(caseCheckEligible(score, env), true);
   assert.equal(caseCheckEligible(score, { ...env, CASE_CHECK_ENABLED: 'false' }), false);
 });
+
+test('settlement listing content and placeholder contact can never enter the customer gate', () => {
+  const score = scoreEconomicCandidate({
+    source_title: 'Up to $25,000 Americold Data Breach Settlement: How to Claim',
+    source_excerpt: 'Article title. Short blurb used on listing page. Americold data breach settlement claim about $100 to $200 with no proof, or up to $25,000 for documented losses. Settlement fund totals USD 5,250,000.',
+    contact_email: 'info@example-settlement.com',
+    contact_route: 'PUBLIC_POST_EMAIL',
+    author_name: 'Elizabeth Kaiser',
+    evidence_score: 67,
+    impact_score: 72,
+    amount_signal: 5250000
+  });
+
+  const env = { CASE_CHECK_ENABLED: 'true', CASE_CHECK_MIN_ECONOMIC_SCORE: '58', CASE_CHECK_MIN_VALUE_USD: '500' };
+  assert.equal(score.leadQualified, false);
+  assert.equal(score.economicallyQualified, false);
+  assert.equal(caseCheckEligible(score, env), false);
+});
