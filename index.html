@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="KF001 Fallradar">
   <title>KF001 Fallradar</title>
-  <link rel="manifest" href="./manifest.json">
+  <link rel="manifest" href="./manifest.json?v=18">
   <link rel="icon" href="./app-icon.svg" sizes="any" type="image/svg+xml">
   <style>
     html,body{margin:0;min-height:100%;background:#0f172a;color:#f8fafc;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -48,7 +48,7 @@
 
   <script src="./owner-auth.js?v=1.6.2"></script>
   <script src="./adapters.js?v=1.4.7"></script>
-  <script src="./slim-owner-ui.js?v=1.4.0"></script>
+  <script src="./slim-owner-ui.js?v=1.4.1"></script>
   <script src="./radar-ui.js?v=1.2.0"></script>
   <script src="./truth-ui-fix.js?v=1.1.2"></script>
   <script src="./governance.js?v=1.6.0"></script>
@@ -79,7 +79,7 @@
     if ('serviceWorker' in navigator) {
       addEventListener('load', async () => {
         try {
-          const reg = await navigator.serviceWorker.register('./sw.js?v=17');
+          const reg = await navigator.serviceWorker.register('./sw.js?v=18');
           await reg.update();
         } catch (_) {}
       }, { once:true });
