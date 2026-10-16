@@ -1,3 +1,4 @@
+import { handleDeliveryRequest } from './product-delivery.js';
 import baseWorker from './worker-v2.js';
 import { enrichQualifiedContacts } from './contact-enrichment.js';
 import { selectBestEconomicCandidate } from './economic-selector.js';
@@ -336,6 +337,10 @@ async function handleCheckoutRedirect(request, env) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (url.pathname === '/api/delivery/authorize' || url.pathname === '/api/delivery/download') {
+      return handleDeliveryRequest(request, env);
+    }
 
     if (request.method === 'POST' && url.pathname === '/v1/stripe/webhook') {
       return handleStripeWebhook(request, env);
