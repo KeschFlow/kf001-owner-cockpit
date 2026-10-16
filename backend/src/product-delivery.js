@@ -4,7 +4,7 @@ const TTL = 300; // Reusable for five minutes, with Stripe revalidation on every
 const headers = {'Cache-Control':'no-store', 'Referrer-Policy':'no-referrer', 'X-Content-Type-Options':'nosniff'};
 const DIAGNOSTIC_CODES = new Set([
   'CONFIG_INVALID', 'REQUEST_INVALID', 'ORIGIN_REJECTED', 'PRODUCT_MISMATCH',
-  'STRIPE_SESSION_FAILED', 'SESSION_MISMATCH', 'STRIPE_LINE_ITEMS_FAILED',
+  'STRIPE_SESSION_FAILED', 'STRIPE_HTTP_REJECTED', 'STRIPE_NETWORK_FAILED', 'SESSION_MISMATCH', 'STRIPE_LINE_ITEMS_FAILED',
   'LINE_ITEM_MISMATCH', 'PAYMENT_INTENT_FAILED', 'PAYMENT_INTENT_MISMATCH',
   'CHARGE_FAILED', 'CHARGE_MISMATCH', 'R2_FILE_MISSING', 'R2_ACCESS_FAILED',
   'TOKEN_INVALID', 'INTERNAL_ERROR'
@@ -39,11 +39,11 @@ async function stripe(path, env, fetcher, failureCode) {
       headers:{Authorization:'Bearer ' + env.DELIVERY_STRIPE_TEST_SECRET, 'Stripe-Version':'2024-06-20'},
       signal:AbortSignal.timeout(10000), redirect:'error'
     });
-    if (!response.ok) reject(failureCode);
+    if (!response.ok) reject(failureCode === 'STRIPE_SESSION_FAILED' ? 'STRIPE_HTTP_REJECTED' : failureCode);
     return await response.json();
   } catch (error) {
     if (error?.deliveryCode) throw error;
-    reject(failureCode);
+    reject(failureCode === 'STRIPE_SESSION_FAILED' ? 'STRIPE_NETWORK_FAILED' : failureCode);
   }
 }
 async function verify(sessionId, product, env, fetcher) {
