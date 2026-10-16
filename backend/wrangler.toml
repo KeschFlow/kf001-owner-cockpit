@@ -4,6 +4,9 @@ compatibility_date = "2026-08-17"
 workers_dev = true
 
 [vars]
+DELIVERY_MODE = "test"
+DELIVERY_APP_ORIGIN = "https://eddiesworld.de"
+DELIVERY_PRODUCTS = "{\"calendar\":{\"price\":\"price_1UR0dcPIcr0WT1tPy3lrP21E\",\"product\":\"prod_VRuS0Lllmq0lu9\",\"amount\":490,\"currency\":\"eur\",\"key\":\"Mit-Eddie-durchs-Jahr-2027-26-Seiten-A4-quer.pdf\"}}"
 PUBLIC_APP_ORIGIN = "https://keschflow.github.io"
 REVENUE_AUTOPILOT_ENABLED = "true"
 CONTROLLED_OUTREACH_ENABLED = "true"
