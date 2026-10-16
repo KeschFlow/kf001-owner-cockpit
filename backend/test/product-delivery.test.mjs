@@ -94,7 +94,7 @@ test('oversized authorization fails closed',async()=>{const f=fixture();assert.e
 test('test-mode diagnostics expose only safe failure codes',async()=>{
  const cases=[
   ['CONFIG_INVALID',f=>f.env.DELIVERY_PRODUCTS='{'],
-  ['STRIPE_SESSION_FAILED',f=>f.offline()],
+  ['STRIPE_NETWORK_FAILED',f=>f.offline()],
   ['SESSION_MISMATCH',f=>f.session.amount_total=491],
   ['LINE_ITEM_MISMATCH',f=>f.items.data[0].price.id='price_other'],
   ['PAYMENT_INTENT_MISMATCH',f=>f.intent.status='canceled'],
@@ -143,4 +143,16 @@ test('diagnostic code is suppressed outside DELIVERY_MODE=test',async()=>{
  const body=await response.json();
  assert.deepEqual(Object.keys(body),['message']);
  assert.equal(JSON.stringify(body).includes('CONFIG_INVALID'),false);
+});
+
+
+test('Stripe session HTTP rejection is distinguished from network failure without leaking response details',async()=>{
+ const f=fixture();
+ const handler=createHandler({fetcher:async()=>new Response(JSON.stringify({error:{message:'private provider details'}}),{status:401})});
+ const response=await handler(new Request('https://shop.example/api/delivery/authorize',{method:'POST',headers:{Origin:'https://shop.example','Content-Type':'application/json'},body:JSON.stringify(request)}),f.env);
+ assert.equal(response.status,403);
+ const body=await response.json();
+ assert.equal(body.code,'STRIPE_HTTP_REJECTED');
+ assert.deepEqual(Object.keys(body).sort(),['code','message']);
+ assert.equal(JSON.stringify(body).includes('private provider details'),false);
 });
