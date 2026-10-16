@@ -90,3 +90,57 @@ test('download denied through deployed entrypoint without token or secrets',asyn
  const r=await worker.fetch(new Request('https://worker.example/api/delivery/download',{method:'POST',headers:{Origin:'https://worker.example','Content-Type':'application/json'},body:'{}'}),{},{});assert.equal(r.status,403);
 });
 test('oversized authorization fails closed',async()=>{const f=fixture();assert.equal((await f.call('authorize',{...request,padding:'x'.repeat(4096)})).status,403)});
+
+test('test-mode diagnostics expose only safe failure codes',async()=>{
+ const cases=[
+  ['CONFIG_INVALID',f=>f.env.DELIVERY_PRODUCTS='{'],
+  ['STRIPE_SESSION_FAILED',f=>f.offline()],
+  ['SESSION_MISMATCH',f=>f.session.amount_total=491],
+  ['LINE_ITEM_MISMATCH',f=>f.items.data[0].price.id='price_other'],
+  ['PAYMENT_INTENT_MISMATCH',f=>f.intent.status='canceled'],
+  ['CHARGE_MISMATCH',f=>f.charge.disputed=true],
+  ['R2_FILE_MISSING',f=>f.env.PRODUCTS_BUCKET.head=async()=>null]
+ ];
+ for(const [expected,mutate] of cases){
+  const f=fixture();mutate(f);
+  const response=await f.call('authorize',request);
+  assert.equal(response.status,403,expected);
+  const body=await response.json();
+  assert.equal(body.code,expected);
+  assert.deepEqual(Object.keys(body).sort(),['code','message']);
+  assert.equal(JSON.stringify(body).includes('sk_test'),false);
+  assert.equal(JSON.stringify(body).includes(request.session),false);
+ }
+});
+
+test('negative sandbox inputs receive specific safe diagnostic codes',async()=>{
+ const f=fixture();
+ const missing=await f.call('download',{});
+ assert.equal(missing.status,403);
+ assert.equal((await missing.json()).code,'TOKEN_INVALID');
+ const value=await token(f);
+ const tampered=await f.call('download',{token:'x'+value});
+ assert.equal(tampered.status,403);
+ assert.equal((await tampered.json()).code,'TOKEN_INVALID');
+ const expiredFixture=fixture();
+ const expiringToken=await token(expiredFixture);
+ expiredFixture.advance(300);
+ const expired=await expiredFixture.call('download',{token:expiringToken});
+ assert.equal(expired.status,403);
+ assert.equal((await expired.json()).code,'TOKEN_INVALID');
+ const wrongProduct=await f.call('authorize',{...request,product:'other'});
+ assert.equal(wrongProduct.status,403);
+ assert.equal((await wrongProduct.json()).code,'PRODUCT_MISMATCH');
+ const fakeSession=await f.call('authorize',{...request,session:'cs_test_nonexistent123'});
+ assert.equal(fakeSession.status,403);
+ assert.equal((await fakeSession.json()).code,'SESSION_MISMATCH');
+});
+
+test('diagnostic code is suppressed outside DELIVERY_MODE=test',async()=>{
+ const f=fixture();f.env.DELIVERY_MODE='live';
+ const response=await f.call('authorize',request);
+ assert.equal(response.status,403);
+ const body=await response.json();
+ assert.deepEqual(Object.keys(body),['message']);
+ assert.equal(JSON.stringify(body).includes('CONFIG_INVALID'),false);
+});
