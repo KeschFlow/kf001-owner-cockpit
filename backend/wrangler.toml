@@ -46,3 +46,7 @@ binding = "CASE_DB"
 database_name = "kf001-owner-state"
 database_id = "5249d296-0295-46fe-bd7f-f7055fca3f7b"
 migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "PRODUCTS_BUCKET"
+bucket_name = "eddiesworld-private-products"
